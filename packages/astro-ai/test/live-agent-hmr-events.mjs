@@ -5,7 +5,7 @@ import { AstroResolver } from '../dist/resolver/astro-resolver.js';
 import { PatchTransactionStore } from '../dist/visual/patch-transactions.js';
 
 const appRoot = fileURLToPath(new URL('../../../app/', import.meta.url));
-const pageFile = fileURLToPath(new URL('../../../app/src/pages/index.astro', import.meta.url));
+const pageFile = fileURLToPath(new URL('../../../app/src/pages/playground.astro', import.meta.url));
 const serverUrl = new URL(process.env.ASTRO_AI_SMOKE_URL ?? 'http://localhost:4321/');
 const socketUrl = new URL(serverUrl);
 socketUrl.protocol = serverUrl.protocol === 'https:' ? 'wss:' : 'ws:';

@@ -5,10 +5,13 @@ import { AstroResolver } from '../dist/resolver/astro-resolver.js';
 import { VisualCommandEngine } from '../dist/visual/command-engine.js';
 
 const appRoot = fileURLToPath(new URL('../../../app/', import.meta.url));
-const pageFile = fileURLToPath(new URL('../../../app/src/pages/index.astro', import.meta.url));
+const pageFile = fileURLToPath(new URL('../../../app/src/pages/playground.astro', import.meta.url));
 const originalHeading = 'Edit this literal heading';
 const changedHeading = 'HMR verified deterministic heading';
-const devServerUrl = process.env.ASTRO_AI_SMOKE_URL ?? 'http://localhost:4321/';
+const devServerUrl = new URL(
+  'playground',
+  process.env.ASTRO_AI_SMOKE_URL ?? 'http://localhost:4321/',
+);
 const resolver = new AstroResolver(appRoot);
 const source = await readFile(pageFile, 'utf8');
 resolver.indexFile(pageFile, source);

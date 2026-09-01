@@ -35,20 +35,20 @@ type RunView = {
   title: HTMLElement;
   elapsed: HTMLSpanElement;
   steps: HTMLUListElement;
-  summary: HTMLParagraphElement;
+  summary: HTMLElement;
   startedAt: number;
 };
 
 type PersistedRun = {
   requestId: string;
   instruction: string;
-  attachment?: SelectionAttachment;
   attachments?: SelectionAttachment[];
   externalContext?: AgentExternalContext;
   startedAt: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   title: string;
   summary: string;
+  diff?: string;
   steps: Array<{ state: AgentOperationState; message: string }>;
 };
 
@@ -110,7 +110,6 @@ export class ChatDrawer {
   constructor(callbacks: ChatDrawerCallbacks) {
     this.#callbacks = callbacks;
     const persistedContext = readSessionJson<{
-      attachment?: SelectionAttachment;
       attachments?: SelectionAttachment[];
       externalContext?: AgentExternalContext;
       locked?: boolean;
@@ -366,6 +365,7 @@ export class ChatDrawer {
           ? resultNote
           : `${event.response.trim()}\n\n${resultNote}`,
       );
+      if (event.transaction?.diff !== undefined) this.#renderDiff(run, event.transaction.diff);
     } else if (event.state === 'failure') {
       this.#finishRun(run, 'failed', 'Couldn’t complete the change', event.message);
     } else if (event.state === 'cancellation') {
@@ -565,7 +565,7 @@ export class ChatDrawer {
     elapsed.textContent = '0s';
     header.append(icon, title, elapsed);
     const steps = element('ul', 'run-steps');
-    const summary = element('p', 'run-summary');
+    const summary = element('div', 'run-summary');
     summary.textContent = 'Connecting to the configured CLI…';
     runRoot.append(header, steps, summary);
     turn.append(userMessage, runRoot);
@@ -624,7 +624,7 @@ export class ChatDrawer {
   ): void {
     run.root.dataset.status = status;
     run.title.textContent = title;
-    run.summary.textContent = summary;
+    run.summary.replaceChildren(renderAgentMarkdown(summary));
     for (const step of run.steps.querySelectorAll<HTMLElement>('.run-step')) {
       step.dataset.status = status === 'completed' ? 'complete' : 'stopped';
     }
@@ -651,8 +651,7 @@ export class ChatDrawer {
       const run = this.#createRun(
         persisted.requestId,
         persisted.instruction,
-        persisted.attachments
-          ?? (persisted.attachment === undefined ? undefined : [persisted.attachment]),
+        persisted.attachments,
         persisted.externalContext,
         persisted.startedAt,
         false,
@@ -671,10 +670,24 @@ export class ChatDrawer {
           persisted.title,
           persisted.summary,
         );
+        if (persisted.diff !== undefined) this.#renderDiff(run, persisted.diff);
       }
     }
     this.#emptyState.hidden = this.#runs.size > 0;
     this.#syncElapsedTimer();
+  }
+
+  #renderDiff(run: RunView, diff: string): void {
+    run.root.querySelector('.run-diff')?.remove();
+    const details = element('details', 'run-diff');
+    const label = document.createElement('summary');
+    label.textContent = 'Review source diff';
+    const code = document.createElement('code');
+    code.textContent = diff;
+    details.append(label, code);
+    run.root.append(details);
+    const persisted = this.#runStates.get(run.requestId);
+    if (persisted !== undefined) persisted.diff = diff;
   }
 
   #persistRuns(): void {
@@ -974,7 +987,13 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .run-step[data-status='active'] .step-dot { animation: agent-pulse 1.2s ease-in-out infinite; background: #a78bfa; }
     .run-step[data-status='complete'] { color: #9ca3af; }
     .run-step[data-status='complete'] .step-dot { background: #22c55e; }
-    .run-summary { color: #aeb7c5; font-size: 11px; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .run-summary { color: #aeb7c5; font-size: 11px; margin: 0; overflow-wrap: anywhere; }
+    .run-summary p { margin: 0 0 8px; white-space: pre-wrap; }
+    .run-summary p:last-child { margin-bottom: 0; }
+    .run-summary ul { margin: 4px 0 8px; padding-left: 20px; }
+    .run-summary pre, .run-diff code { background: #090c11; border: 1px solid #303744; border-radius: 7px; color: #dbeafe; display: block; font: 10px/1.5 ui-monospace, SFMono-Regular, monospace; margin: 7px 0; max-height: 260px; overflow: auto; padding: 9px; white-space: pre; }
+    .run-diff { border-top: 1px solid #29313b; color: #c4b5fd; font-size: 10px; margin-top: 10px; padding-top: 8px; }
+    .run-diff summary { cursor: pointer; font-weight: 700; }
     .chat-composer { background: #10141a; border-top: 1px solid #292f3a; padding: 12px 14px 14px; }
     .composer-frame { background: #090c11; border: 1px solid #343c49; border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
     .composer-frame:focus-within { border-color: #7567d6; box-shadow: 0 0 0 2px rgb(139 92 246 / .15); }
@@ -1009,6 +1028,80 @@ export function createChatDrawerStyle(): HTMLStyleElement {
 
 function cloneAttachments(attachments: SelectionAttachment[]): SelectionAttachment[] {
   return JSON.parse(JSON.stringify(attachments)) as SelectionAttachment[];
+}
+
+export type AgentMarkdownBlock =
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'code'; text: string; language?: string }
+  | { kind: 'list'; items: string[] };
+
+/** Small, injection-safe markdown subset for CLI explanations. */
+export function parseAgentMarkdown(source: string): AgentMarkdownBlock[] {
+  const blocks: AgentMarkdownBlock[] = [];
+  const lines = source.replaceAll('\r\n', '\n').split('\n');
+  let paragraph: string[] = [];
+  const flushParagraph = (): void => {
+    if (paragraph.length > 0) blocks.push({ kind: 'paragraph', text: paragraph.join('\n') });
+    paragraph = [];
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const fence = line.match(/^```([^`]*)$/);
+    if (fence !== null) {
+      flushParagraph();
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```/.test(lines[index] ?? '')) {
+        code.push(lines[index] ?? '');
+        index += 1;
+      }
+      const language = fence[1]?.trim();
+      blocks.push({ kind: 'code', text: code.join('\n'), ...(language === undefined || language === '' ? {} : { language }) });
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index] ?? '')) {
+        items.push((lines[index] ?? '').replace(/^\s*[-*]\s+/, ''));
+        index += 1;
+      }
+      index -= 1;
+      blocks.push({ kind: 'list', items });
+      continue;
+    }
+    if (line.trim() === '') flushParagraph();
+    else paragraph.push(line);
+  }
+  flushParagraph();
+  return blocks;
+}
+
+function renderAgentMarkdown(source: string): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  for (const block of parseAgentMarkdown(source)) {
+    if (block.kind === 'paragraph') {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = block.text;
+      fragment.append(paragraph);
+    } else if (block.kind === 'code') {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      if (block.language !== undefined) code.dataset.language = block.language;
+      code.textContent = block.text;
+      pre.append(code);
+      fragment.append(pre);
+    } else {
+      const list = document.createElement('ul');
+      for (const item of block.items) {
+        const row = document.createElement('li');
+        row.textContent = item;
+        list.append(row);
+      }
+      fragment.append(list);
+    }
+  }
+  return fragment;
 }
 
 function providerLabel(provider?: string): string {

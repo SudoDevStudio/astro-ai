@@ -17,10 +17,11 @@ export function buildAIVitePlugin(resolver: AstroResolver): Plugin {
     transform: {
       order: 'pre',
       handler(source, id) {
-        if (!isSupportedSourceId(id) || !resolver.ownsFile(id)) {
+        const file = sourceFileFromId(id);
+        if (file === undefined || !resolver.ownsFile(file)) {
           return null;
         }
-        return resolver.instrumentFile(id, source);
+        return resolver.instrumentFile(file, source);
       },
     },
     configureServer(server) {
@@ -31,10 +32,15 @@ export function buildAIVitePlugin(resolver: AstroResolver): Plugin {
   };
 }
 
+export function sourceFileFromId(id: string): string | undefined {
+  const [file, query = ''] = id.split('?', 2);
+  if (file === undefined || file.split(/[\\/]/).includes('node_modules')) return undefined;
+  if (!/\.(?:astro|jsx?|tsx?)$/.test(file)) return undefined;
+  if (file.endsWith('.astro') && query !== '') return undefined;
+  if (query !== '' && /(?:^|&)(?:astro|type|lang)\b/.test(query)) return undefined;
+  return file;
+}
+
 function isSupportedSourceId(id: string): boolean {
-  return (
-    !id.includes('?') &&
-    !id.split(/[\\/]/).includes('node_modules') &&
-    /\.(?:astro|jsx?|tsx?)$/.test(id)
-  );
+  return sourceFileFromId(id) !== undefined;
 }

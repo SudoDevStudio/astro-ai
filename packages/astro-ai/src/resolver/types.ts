@@ -21,6 +21,7 @@ export type SourceNodeRecord = {
   filePath: string;
   sourceLanguage: 'astro' | 'jsx' | 'tsx';
   sourceHash: string;
+  structuralPath: string;
   source: SourceLocation;
   range: SourceRange;
   openingRange: SourceRange;
@@ -42,4 +43,5 @@ export type SourceNodeRecord = {
   repeatContext?: RepeatContext;
   hydratedIsland: boolean;
   instrumentable: boolean;
+  selfClosing: boolean;
 };

@@ -13,6 +13,10 @@ const socketUrl = new URL(serverUrl);
 socketUrl.protocol = serverUrl.protocol === 'https:' ? 'wss:' : 'ws:';
 socketUrl.pathname = '/';
 
+const reactPage = new URL('/react', serverUrl);
+const response = await fetch(reactPage);
+if (!response.ok) throw new Error(`Could not load the React fixture route: ${response.status}`);
+
 const resolver = new AstroResolver(appRoot);
 const source = await readFile(componentFile, 'utf8');
 resolver.indexFile(componentFile, source);
@@ -27,17 +31,19 @@ await waitForSocket(socket, 'open');
 let applied = false;
 
 try {
+  const applyEventPromise = waitForHmrEvent(socket);
   await engine.execute({
     kind: 'edit-literal-text',
     nodeId: heading.nodeId,
     text: 'React TSX HMR probe',
   });
   applied = true;
-  const applyEvent = await waitForHmrEvent(socket);
+  const applyEvent = await applyEventPromise;
 
+  const undoEventPromise = waitForHmrEvent(socket);
   await engine.transactions.undo();
   applied = false;
-  const undoEvent = await waitForHmrEvent(socket);
+  const undoEvent = await undoEventPromise;
 
   console.log(`React HMR events passed: apply=${applyEvent.type}, undo=${undoEvent.type}`);
 } finally {

@@ -14,7 +14,8 @@ the only source of truth and Vite HMR remains the only renderer.
   local component ancestry, literal props, content provenance, and repeat
   context.
 - `AgentFallback` is a separate server-only boundary for rejected operations.
-  No provider is invoked by the current vertical slice.
+  It runs the configured Codex or Claude CLI only for work that cannot be
+  completed by deterministic source transformations.
 
 ## Configuration
 
@@ -26,6 +27,12 @@ export default defineConfig({
   integrations: [
     buildWithAI({
       agent: 'codex',
+      excludeDirectories: [
+        'vendor',
+        'src/generated',
+        'public/uploads',
+      ],
+      skills: ['AGENTS.md', 'docs/frontend-conventions.md'],
       visualComponents: [
         {
           name: 'Card',
@@ -41,11 +48,27 @@ export default defineConfig({
 });
 ```
 
+`excludeDirectories` extends the built-in isolated-workspace exclusions. A
+single directory name such as `vendor` is excluded wherever it occurs; a path
+such as `src/generated` is relative to the Astro project root. Absolute paths
+and parent traversal are rejected.
+
+The agent workspace also honors the project's `.gitignore`, excludes common
+framework/build output and log files, and enforces file-count, per-file, and
+total-size limits. `skills` contains project-relative convention files that are
+attached to agent prompts. Invalid paths are reported by Astro's integration
+logger without crashing the development server.
+
 ### CLI agent authentication
 
 AI operations use an authenticated local CLI process on the Astro development
 server. Credentials stay in the CLI's own credential store and are never sent
 to the toolbar browser code.
+
+Toolbar conversations are not mirrored into provider chat applications. The
+integration launches isolated non-interactive CLI runs, and Codex currently
+uses `--ephemeral`, which deliberately avoids writing provider session files.
+The visible transcript is stored in the browser tab's `sessionStorage`.
 
 For Codex:
 
@@ -84,11 +107,21 @@ buildWithAI({
 })
 ```
 
-The toolbar checks installation and authentication when it connects. Agent
-runs operate on an isolated temporary project copy. The resulting source
+The toolbar caches installation/authentication checks briefly. Agent runs use
+an isolated, incrementally synchronized temporary workspace that links the
+project's existing `node_modules` for type-checking without copying it. The resulting source
 changes are reviewed and applied to the live project as one reversible
-multi-file patch transaction. The integration does not use dangerous CLI
-sandbox-bypass flags.
+multi-file patch transaction. Provider tool progress is streamed into the
+toolbar, recent turns are supplied to follow-up requests, and configured
+`check`, `typecheck`, or `test:types` scripts run before changes are applied.
+The integration does not use dangerous CLI sandbox-bypass flags and passes an
+allowlisted child-process environment rather than the dev server's complete
+environment.
+
+The credentialed agent bridge is disabled when Astro listens beyond loopback
+(for example, `--host 0.0.0.0`). On a trusted private network it can be enabled
+explicitly with `allowNetworkAgent: true`; never expose that mode to an
+untrusted LAN or the public internet.
 
 Registered Astro components can forward development selection metadata by
 spreading unconsumed props onto their source-backed root element. Native DOM
@@ -122,9 +155,13 @@ is added during production builds.
 - Edit type-compatible literal component props and enforce registered enum or
   token values.
 - Undo and redo each source transaction.
+- Persist bounded undo/redo history under `.astro/astro-ai`, retain recoverable
+  diffs for conflicts, and show a human-readable diff for agent changes.
 - Use Undo and Redo from the agent workspace header rather than a second
   floating status panel.
 - Render edits through normal Vite HMR.
+- Select source nodes by keyboard with Tab and Enter/Space while selection mode
+  is active.
 - Automatically attach the active source selection to chat while allowing an
   explicit page-level prompt when nothing is selected.
 - Offer a development-only **Fix with AI** action for Vite error overlays and

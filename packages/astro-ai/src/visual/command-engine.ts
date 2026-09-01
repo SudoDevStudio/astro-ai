@@ -25,6 +25,7 @@ export class VisualCommandEngine {
   }
 
   async execute(command: DeterministicVisualCommand): Promise<PatchTransactionSummary> {
+    if (command.kind === 'insert-literal-element') return this.#insertLiteralElement(command);
     const node = this.#resolver.requireNode(command.nodeId);
     const before = await this.#readFreshSource(node);
     const capabilities = this.#resolver.resolveSelection(node.nodeId, '').capabilities;
@@ -59,12 +60,41 @@ export class VisualCommandEngine {
         );
         break;
       }
+      case 'remove-source-node':
+        if (!capabilities.removable) throw new Error('This source node cannot be removed safely.');
+        after = replaceRange(before, node.range.start, node.range.end, '');
+        break;
+      case 'move-to-slot':
+        after = this.#moveToSlot(node, before, command.targetNodeId, command.slot);
+        break;
       default:
         throw new Error('Unsupported visual operation; route it to the agent fallback.');
     }
 
     assertValidSource(after, node);
-    return this.transactions.commit(command.kind, node.filePath, before, after);
+    const transaction = await this.transactions.commit(command.kind, node.filePath, before, after);
+    // Populate the resolver once immediately so a second local command can use
+    // the stable selection. Vite's subsequent transform hits the source-hash
+    // cache instead of parsing the same file again.
+    this.#resolver.indexFile(node.filePath, after);
+    return transaction;
+  }
+
+  async #insertLiteralElement(command: Extract<DeterministicVisualCommand, { kind: 'insert-literal-element' }>): Promise<PatchTransactionSummary> {
+    if (!/^[a-z][a-z0-9-]*$/.test(command.tag)) throw new Error('Only native lowercase element names can be inserted deterministically.');
+    const file = this.#resolver.toAbsoluteProjectFile(command.file);
+    const before = await readFile(file, 'utf8');
+    const zone = this.#resolver.findInsertionPoints(file).find((candidate) =>
+      candidate.parentNodeId === command.parentNodeId && candidate.slot === command.slot
+    );
+    if (zone === undefined) throw new Error('The requested insertion zone is no longer available.');
+    const slotAttribute = command.slot === undefined ? '' : ` slot=${JSON.stringify(command.slot)}`;
+    const markup = `<${command.tag}${slotAttribute}>${escapeJsxText(command.text)}</${command.tag}>`;
+    const after = replaceRange(before, zone.offset, zone.offset, `${zone.offset === 0 ? '' : '\n'}${markup}`);
+    assertValidFile(after, file);
+    const transaction = await this.transactions.commit(command.kind, file, before, after);
+    this.#resolver.indexFile(file, after);
+    return transaction;
   }
 
   async #readFreshSource(node: SourceNodeRecord): Promise<string> {
@@ -110,6 +140,24 @@ export class VisualCommandEngine {
       right.range.end,
       `${source.slice(right.range.start, right.range.end)}${separator}${source.slice(left.range.start, left.range.end)}`,
     );
+  }
+
+  #moveToSlot(node: SourceNodeRecord, source: string, targetNodeId: string, slot: string): string {
+    const target = this.#resolver.requireNode(targetNodeId);
+    const childType = node.componentName ?? node.tagName ?? '';
+    if (
+      target.filePath !== node.filePath || target.componentName === undefined || target.selfClosing
+      || !this.#resolver.acceptsSlot(target.componentName, slot, childType)
+      || (target.range.start >= node.range.start && target.range.end <= node.range.end)
+    ) throw new Error('The target is not a compatible declared source slot.');
+    if (node.literalProps.some(({ name }) => name === 'slot')) throw new Error('The node already declares a slot assignment.');
+    const opening = source.slice(node.openingRange.start, node.openingRange.end);
+    const insertion = opening.endsWith('/>') ? opening.length - 2 : opening.length - 1;
+    const moved = `${opening.slice(0, insertion)} slot=${JSON.stringify(slot)}${opening.slice(insertion)}${source.slice(node.openingRange.end, node.range.end)}`;
+    const without = replaceRange(source, node.range.start, node.range.end, '');
+    let targetOffset = target.range.end - `</${target.componentName}>`.length;
+    if (node.range.start < targetOffset) targetOffset -= node.range.end - node.range.start;
+    return replaceRange(without, targetOffset, targetOffset, `\n${moved}\n`);
   }
 }
 
@@ -185,5 +233,18 @@ function assertValidSource(source: string, node: SourceNodeRecord): void {
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Unknown parser error.';
     throw new Error(`Source transformation made ${node.source.file} invalid: ${detail}`);
+  }
+}
+
+function assertValidFile(source: string, file: string): void {
+  if (file.endsWith('.astro')) {
+    const error = parseAstro(source).diagnostics.find((diagnostic) => diagnostic.severity === 'error');
+    if (error !== undefined) throw new Error(`Source transformation made ${file} invalid: ${error.text}`);
+    return;
+  }
+  try {
+    parseJavaScript(source, { sourceType: 'unambiguous', plugins: file.endsWith('.tsx') ? ['jsx', 'typescript'] : ['jsx'] });
+  } catch (error) {
+    throw new Error(`Source transformation made ${file} invalid: ${error instanceof Error ? error.message : 'Unknown parser error.'}`);
   }
 }

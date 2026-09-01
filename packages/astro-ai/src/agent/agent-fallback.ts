@@ -9,7 +9,6 @@ export type AgentFallbackRequest = {
   instruction: string;
   reason: string;
   mode?: AgentRequestMode;
-  selection?: SelectionContext;
   selections?: SelectionContext[];
   externalContext?: AgentExternalContext;
   signal?: AbortSignal;
@@ -20,7 +19,8 @@ export type AgentProgressState =
   | 'reading'
   | 'editing'
   | 'validation'
-  | 'diagnostics';
+  | 'diagnostics'
+  | 'tool';
 
 export type AgentProviderStatus = {
   provider: string;
@@ -43,6 +43,8 @@ export type AgentFallbackResult = {
 export abstract class AgentFallback {
   abstract status(): Promise<AgentProviderStatus>;
 
+  dispose(): void | Promise<void> {}
+
   abstract execute(
     request: AgentFallbackRequest,
     transactions: PatchTransactionStore,
@@ -50,12 +52,19 @@ export abstract class AgentFallback {
 }
 
 export class UnavailableAgentFallback extends AgentFallback {
+  readonly #message: string;
+
+  constructor(message = 'No CLI agent provider is configured.') {
+    super();
+    this.#message = message;
+  }
+
   status(): Promise<AgentProviderStatus> {
     return Promise.resolve({
       provider: 'none',
       available: false,
       authenticated: false,
-      message: 'No CLI agent provider is configured.',
+      message: this.#message,
     });
   }
 
@@ -64,7 +73,7 @@ export class UnavailableAgentFallback extends AgentFallback {
     _transactions: PatchTransactionStore,
   ): Promise<AgentFallbackResult> {
     return Promise.reject(
-      new Error('This operation requires the agent fallback, which is not configured.'),
+      new Error(this.#message),
     );
   }
 }

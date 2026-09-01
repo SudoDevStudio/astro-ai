@@ -47,6 +47,8 @@ export class SelectionOverlay {
   #marqueeOrigin: MarqueeOrigin | undefined;
   #marqueeActive = false;
   #suppressClick = false;
+  #viewportFrame: number | undefined;
+  readonly #tabIndexes = new Map<HTMLElement, string | null>();
 
   constructor(callbacks: SelectionOverlayCallbacks) {
     this.#callbacks = callbacks;
@@ -72,6 +74,9 @@ export class SelectionOverlay {
     window.addEventListener('resize', this.#onViewportChange);
     this.#observer = new MutationObserver(this.#onMutations);
     this.#observer.observe(document.documentElement, { childList: true, subtree: true });
+    this.#makeKeyboardReachable();
+    document.addEventListener('focusin', this.#onFocusIn, true);
+    document.addEventListener('keydown', this.#onSelectionKeyDown, true);
   }
 
   disable(): void {
@@ -84,6 +89,15 @@ export class SelectionOverlay {
     window.removeEventListener('resize', this.#onViewportChange);
     this.#observer?.disconnect();
     this.#observer = undefined;
+    document.removeEventListener('focusin', this.#onFocusIn, true);
+    document.removeEventListener('keydown', this.#onSelectionKeyDown, true);
+    for (const [element, previous] of this.#tabIndexes) {
+      if (previous === null) element.removeAttribute('tabindex');
+      else element.setAttribute('tabindex', previous);
+    }
+    this.#tabIndexes.clear();
+    if (this.#viewportFrame !== undefined) window.cancelAnimationFrame(this.#viewportFrame);
+    this.#viewportFrame = undefined;
     if (this.#mutationTimer !== undefined) window.clearTimeout(this.#mutationTimer);
   }
 
@@ -264,16 +278,26 @@ export class SelectionOverlay {
   };
 
   readonly #onViewportChange = (): void => {
-    for (const [nodeId, item] of this.#selected) {
-      if (!item.element.isConnected) this.#removeItem(nodeId);
-      else this.#updateItem(item);
-    }
-    this.#actions.reposition();
-    this.#emitAnchor();
+    if (this.#viewportFrame !== undefined) return;
+    this.#viewportFrame = window.requestAnimationFrame(() => {
+      this.#viewportFrame = undefined;
+      const rects: DOMRect[] = [];
+      for (const [nodeId, item] of this.#selected) {
+        if (!item.element.isConnected) this.#removeItem(nodeId);
+        else {
+          const rect = item.element.getBoundingClientRect();
+          rects.push(rect);
+          this.#updateItem(item, rect);
+        }
+      }
+      this.#actions.reposition();
+      this.#emitAnchor(rects);
+    });
   };
 
   readonly #onMutations = (records: MutationRecord[]): void => {
     if (records.every(({ target }) => isEditorUiTarget(target))) return;
+    this.#makeKeyboardReachable();
     if (this.#selected.size === 0 || this.#mutationTimer !== undefined) return;
     this.#mutationTimer = window.setTimeout(() => {
       this.#mutationTimer = undefined;
@@ -318,8 +342,8 @@ export class SelectionOverlay {
     this.#emitAnchor();
   }
 
-  #emitAnchor(): void {
-    const rects = [...this.#selected.values()].filter(({ element }) => element.isConnected).map(({ element }) => element.getBoundingClientRect());
+  #emitAnchor(measured?: DOMRect[]): void {
+    const rects = measured ?? [...this.#selected.values()].filter(({ element }) => element.isConnected).map(({ element }) => element.getBoundingClientRect());
     if (rects.length === 0) {
       this.#callbacks.onSelectionAnchorChange();
       return;
@@ -331,13 +355,40 @@ export class SelectionOverlay {
     this.#callbacks.onSelectionAnchorChange(new DOMRect(left, top, right - left, bottom - top));
   }
 
-  #updateItem(item: SelectedItem): void {
+  #updateItem(item: SelectedItem, rect?: DOMRect): void {
     const source = item.context.selectedNode.source;
     item.label.textContent = `${middleTruncatePath(source.file, 38)}:${source.start.line}`;
     item.label.title = source.file;
     item.highlight.style.display = 'block';
-    positionElement(item.highlight, item.element);
+    positionElement(item.highlight, item.element, rect);
   }
+
+  #makeKeyboardReachable(): void {
+    for (const element of document.querySelectorAll<HTMLElement>(NODE_SELECTOR)) {
+      if (this.#tabIndexes.has(element)) continue;
+      this.#tabIndexes.set(element, element.getAttribute('tabindex'));
+      if (!element.hasAttribute('tabindex')) element.tabIndex = 0;
+    }
+  }
+
+  readonly #onFocusIn = (event: FocusEvent): void => {
+    if (!this.#active) return;
+    const source = findSourceElement(event.target);
+    if (source === undefined) return;
+    positionElement(this.#hover, source);
+    this.#hoverLabel.textContent = source.dataset.astroAiName ?? source.tagName.toLowerCase();
+    this.#hover.style.display = 'block';
+  };
+
+  readonly #onSelectionKeyDown = (event: KeyboardEvent): void => {
+    if (!this.#active || (event.key !== 'Enter' && event.key !== ' ')) return;
+    const target = findSourceElement(event.target);
+    const nodeId = target?.dataset.astroAiId;
+    if (target === undefined || nodeId === undefined) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.#inspect(target, nodeId, event.shiftKey ? 'add' : 'replace');
+  };
 
   #removeItem(nodeId: string): void {
     this.#selected.get(nodeId)?.highlight.remove();
@@ -402,8 +453,8 @@ function createMarquee(): HTMLDivElement {
   return marquee;
 }
 
-function positionElement(overlay: HTMLElement, target: HTMLElement): void {
-  const rect = target.getBoundingClientRect();
+function positionElement(overlay: HTMLElement, target: HTMLElement, measured?: DOMRect): void {
+  const rect = measured ?? target.getBoundingClientRect();
   Object.assign(overlay.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
 }
 

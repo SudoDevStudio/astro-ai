@@ -5,7 +5,10 @@ import test from 'node:test';
 import buildWithAI, {
   agentSelectionReferences,
   BUILD_AI_VITE_PLUGIN_NAME,
+  isExternallyBound,
 } from '../dist/integration/index.js';
+import { AstroResolver } from '../dist/resolver/astro-resolver.js';
+import { buildAIVitePlugin } from '../dist/vite/build-ai-plugin.js';
 import {
   CLIENT_EVENTS,
   PROTOCOL_VERSION,
@@ -38,9 +41,6 @@ test('preserves every selected source reference for an agent request', () => {
     { nodeId: 'section-two', route: '/docs' },
   ];
   assert.deepEqual(agentSelectionReferences({ attachments }), attachments);
-  assert.deepEqual(agentSelectionReferences({
-    attachment: { nodeId: 'legacy-selection', route: '/' },
-  }), [{ nodeId: 'legacy-selection', route: '/' }]);
   assert.deepEqual(agentSelectionReferences({}), []);
 });
 
@@ -77,6 +77,25 @@ test('the serve-only Vite plugin instruments native React JSX and TSX nodes', ()
   assert.match(result.code, /<h2 data-astro-ai-id=/);
   assert.doesNotMatch(result.code, /<Child data-astro-ai-id=/);
   assert.match(result.map.sources[0], /test\/ReactFixture\.tsx$/);
+});
+
+test('cleans resolver manifests when Vite reports an unlinked source file', () => {
+  const resolver = new AstroResolver('/project');
+  const plugin = buildAIVitePlugin(resolver);
+  const file = '/project/src/Gone.tsx';
+  plugin.transform.handler('export const Gone = () => <main>Gone</main>', file);
+  assert.equal(resolver.listNodes(file).length, 1);
+  let unlink;
+  plugin.configureServer({ watcher: { on(event, callback) { if (event === 'unlink') unlink = callback; } } });
+  unlink(file);
+  assert.equal(resolver.listNodes(file).length, 0);
+});
+
+test('blocks the credentialed bridge on externally bound dev servers by default', () => {
+  assert.equal(isExternallyBound('0.0.0.0'), true);
+  assert.equal(isExternallyBound(true), true);
+  assert.equal(isExternallyBound('127.0.0.1'), false);
+  assert.equal(isExternallyBound('localhost'), false);
 });
 
 for (const command of ['build', 'preview', 'sync']) {
@@ -182,7 +201,7 @@ test('routes explicit AI requests through the fallback without a source transact
   ]);
   assert.equal(sent[1][0], SERVER_EVENTS.agentEvent);
   assert.equal(sent[1][1].state, 'failure');
-  assert.match(sent[1][1].message, /not configured/);
+  assert.match(sent[1][1].message, /not configured|No CLI agent provider/);
   const failureEvent = sent[1];
 
   sent.length = 0;
@@ -190,9 +209,8 @@ test('routes explicit AI requests through the fallback without a source transact
     protocolVersion: PROTOCOL_VERSION,
     route: '/',
   });
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 1);
   assert.equal(sent[0][0], SERVER_EVENTS.ready);
-  assert.deepEqual(sent[1], failureEvent);
 
   sent.length = 0;
   await listeners.get(CLIENT_EVENTS.agentInstruction)({

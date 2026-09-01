@@ -77,8 +77,6 @@ export type AgentInstructionMessage = {
   instruction: string;
   mode?: AgentRequestMode;
   attachments?: AgentSelectionReference[];
-  /** @deprecated Kept for compatibility with an open pre-multi-select tab. */
-  attachment?: AgentSelectionReference;
   externalContext?: AgentExternalContext;
 };
 
@@ -92,6 +90,7 @@ export type AgentOperationState =
   | 'editing'
   | 'validation'
   | 'diagnostics'
+  | 'tool'
   | 'completion'
   | 'cancellation'
   | 'failure';

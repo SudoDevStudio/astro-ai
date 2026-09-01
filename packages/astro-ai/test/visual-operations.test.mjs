@@ -305,6 +305,61 @@ test('parses React JSX literal props without treating expressions as editable te
   assert.equal(dynamic.dataProvenance.kind, 'prop');
 });
 
+test('supports registered design tokens, declared slots, removal, and insertion zones', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'astro-ai-slots-'));
+  const file = join(directory, 'page.astro');
+  const source = '<Layout><p>Existing</p></Layout>\n<p>Move me</p>\n<Card tone="violet" />';
+  await writeFile(file, source, 'utf8');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const capabilities = new VisualCapabilityResolver([
+    { name: 'Layout', slots: [{ name: 'content', accepts: ['p'] }], layout: 'flow' },
+    { name: 'Card', props: { tone: { control: 'design-token', values: ['violet', 'neutral'] } } },
+  ]);
+  const resolver = new AstroResolver(directory, capabilities);
+  resolver.indexFile(file, source);
+  const engine = new VisualCommandEngine(resolver, new PatchTransactionStore(resolver, { historyFile: false }));
+  const moving = resolver.listNodes(file).find(({ textValue }) => textValue === 'Move me');
+  const layout = resolver.listNodes(file).find(({ componentName }) => componentName === 'Layout');
+  const card = resolver.listNodes(file).find(({ componentName }) => componentName === 'Card');
+  assert.ok(moving); assert.ok(layout); assert.ok(card);
+  assert.deepEqual(resolver.resolveSelection(moving.nodeId, '/').capabilities.allowedParentSlots, ['Layout:content']);
+  assert.equal(resolver.resolveSelection(moving.nodeId, '/').capabilities.removable, true);
+  assert.equal(resolver.resolveSelection(card.nodeId, '/').capabilities.editableProps[0]?.control, 'design-token');
+  assert.equal(resolver.findInsertionPoints(file).some(({ slot }) => slot === 'content'), true);
+
+  await engine.execute({ kind: 'move-to-slot', nodeId: moving.nodeId, targetNodeId: layout.nodeId, slot: 'content' });
+  assert.match(await readFile(file, 'utf8'), /<p slot="content">Move me<\/p>\s*<\/Layout>/);
+  const moved = resolver.listNodes(file).find(({ textValue }) => textValue === 'Move me');
+  assert.ok(moved);
+  await engine.execute({ kind: 'remove-source-node', nodeId: moved.nodeId });
+  assert.doesNotMatch(await readFile(file, 'utf8'), /Move me/);
+
+  await engine.execute({ kind: 'insert-literal-element', file, tag: 'section', text: 'New section' });
+  assert.match(await readFile(file, 'utf8'), /<section>New section<\/section>/);
+});
+
+test('reports differentiated data sources and relevant imported files', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'astro-ai-lineage-'));
+  const file = join(directory, 'page.astro');
+  const source = `---
+import { label } from './data';
+const products = await getCollection('products');
+---
+<main><h2>{label}</h2><p>{products.length}</p></main>`;
+  await writeFile(file, source, 'utf8');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const resolver = new AstroResolver(directory);
+  resolver.indexFile(file, source);
+  const heading = resolver.listNodes(file).find(({ tagName }) => tagName === 'h2');
+  const paragraph = resolver.listNodes(file).find(({ tagName }) => tagName === 'p');
+  assert.ok(heading); assert.ok(paragraph);
+  const importContext = resolver.resolveSelection(heading.nodeId, '/');
+  const contentContext = resolver.resolveSelection(paragraph.nodeId, '/');
+  assert.equal(importContext.capabilities.dataProvenance.sourceFile, 'data');
+  assert.equal(importContext.relevantFiles.includes('data'), true);
+  assert.equal(contentContext.capabilities.dataProvenance.sourceType, 'content-collection');
+});
+
 async function createFixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'astro-ai-visual-'));
   const file = join(directory, 'page.astro');

@@ -1,6 +1,6 @@
 import type { SelectionContext } from '../shared/selection-context.js';
 
-export type ContextualActionId = 'edit' | 'props' | 'move' | 'ask-ai' | 'source';
+export type ContextualActionId = 'edit' | 'props' | 'move' | 'remove' | 'ask-ai' | 'source';
 
 export type ContextualAction = {
   id: ContextualActionId;
@@ -25,6 +25,7 @@ export function contextualActions(context: SelectionContext): ContextualAction[]
   if (context.capabilities.movable || context.capabilities.reorderable) {
     actions.push({ id: 'move', label: 'Move' });
   }
+  if (context.capabilities.removable) actions.push({ id: 'remove', label: 'Remove' });
   actions.push({ id: 'ask-ai', label: 'Ask AI' }, { id: 'source', label: 'Source' });
   return actions;
 }

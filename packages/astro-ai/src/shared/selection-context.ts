@@ -26,6 +26,8 @@ export type DataProvenance = {
   symbol?: string;
   declaredAt?: SourceLocation;
   readOnly: boolean;
+  sourceType?: 'api' | 'action' | 'content-collection' | 'graphql' | 'import';
+  sourceFile?: string;
 };
 
 export type RepeatContext = {
@@ -40,6 +42,7 @@ export type EditableProp = {
   type: 'string' | 'number' | 'boolean';
   value: string | number | boolean;
   allowedValues?: Array<string | number | boolean>;
+  control?: 'text' | 'number' | 'boolean' | 'enum' | 'design-token';
 };
 
 export type VisualCapabilities = {
@@ -74,4 +77,15 @@ export type SelectionContext = {
     source?: SourceLocation;
   }>;
   capabilities: VisualCapabilities;
+  relevantFiles: string[];
+  skillFiles: string[];
+};
+
+export type SourceInsertionZone = {
+  id: string;
+  file: string;
+  offset: number;
+  parentNodeId?: string;
+  slot?: string;
+  acceptedChildTypes: string[];
 };

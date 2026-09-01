@@ -41,7 +41,10 @@ export type BuildWithAIOptions = {
     command?: string;
     model?: string;
   } | false;
+  excludeDirectories?: string[];
   skills?: string[];
+  /** Required to expose the credentialed agent bridge when Astro is bound beyond loopback. */
+  allowNetworkAgent?: boolean;
   visualComponents?: VisualComponentDefinition[];
 };
 
@@ -57,10 +60,9 @@ export type {
 export type { VisualComponentDefinition } from '../shared/visual-components.js';
 
 export function agentSelectionReferences(
-  message: Pick<AgentInstructionMessage, 'attachment' | 'attachments'>,
+  message: Pick<AgentInstructionMessage, 'attachments'>,
 ): NonNullable<AgentInstructionMessage['attachments']> {
-  return message.attachments
-    ?? (message.attachment === undefined ? [] : [message.attachment]);
+  return message.attachments ?? [];
 }
 
 export default function buildWithAI(
@@ -74,12 +76,13 @@ export default function buildWithAI(
   return {
     name: TOOLBAR_APP_ID,
     hooks: {
-      'astro:config:setup': ({ config, command, addDevToolbarApp, updateConfig }) => {
+      'astro:config:setup': ({ config, command, addDevToolbarApp, updateConfig, logger }) => {
         if (command !== 'dev') return;
 
         resolver = new AstroResolver(
           fileURLToPath(config.root),
           new VisualCapabilityResolver(options.visualComponents),
+          options.skills ?? [],
         );
         engine = new VisualCommandEngine(
           resolver,
@@ -112,12 +115,20 @@ export default function buildWithAI(
           const cli = typeof options.agent === 'string'
             ? { provider: options.agent }
             : options.agent;
-          agent = new CliAgentFallback({
-            provider: cli.provider,
-            projectRoot: fileURLToPath(config.root),
-            ...('command' in cli && cli.command !== undefined ? { command: cli.command } : {}),
-            ...('model' in cli && cli.model !== undefined ? { model: cli.model } : {}),
-          });
+          try {
+            agent = new CliAgentFallback({
+              provider: cli.provider,
+              projectRoot: fileURLToPath(config.root),
+              ...(options.excludeDirectories === undefined ? {} : { excludeDirectories: options.excludeDirectories }),
+              ...(options.skills === undefined ? {} : { skills: options.skills }),
+              ...('command' in cli && cli.command !== undefined ? { command: cli.command } : {}),
+              ...('model' in cli && cli.model !== undefined ? { model: cli.model } : {}),
+            });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : 'Invalid agent configuration.';
+            logger.error(`[astro-ai] ${detail}`);
+            agent = new UnavailableAgentFallback(`Agent configuration error: ${detail}`);
+          }
         }
 
         addDevToolbarApp({
@@ -147,15 +158,12 @@ export default function buildWithAI(
         const activeResolver = resolver;
         const activeEngine = engine;
         const activeRequests = new Map<string, AbortController>();
-        const recentAgentEvents = new Map<string, AgentOperationEvent>();
+        const networkExposed = isExternallyBound(server?.config?.server?.host);
+        const activeAgent = networkExposed && options.allowNetworkAgent !== true
+          ? new UnavailableAgentFallback('The AI agent bridge is disabled because Astro is listening beyond loopback. Set allowNetworkAgent: true only on a trusted network.')
+          : agent;
 
         const sendAgentEvent = (event: AgentOperationEvent): void => {
-          recentAgentEvents.set(event.requestId, event);
-          while (recentAgentEvents.size > 20) {
-            const oldest = recentAgentEvents.keys().next().value as string | undefined;
-            if (oldest === undefined) break;
-            recentAgentEvents.delete(oldest);
-          }
           toolbar.send<AgentOperationEvent>(SERVER_EVENTS.agentEvent, event);
         };
 
@@ -168,14 +176,12 @@ export default function buildWithAI(
           }
 
           logger.debug(`Toolbar connected for route ${message.route}.`);
+          await activeEngine.transactions.ready();
           toolbar.send<ServerReadyMessage>(SERVER_EVENTS.ready, {
             protocolVersion: PROTOCOL_VERSION,
             history: activeEngine.transactions.state(),
-            agent: await agent.status(),
+            agent: await activeAgent.status(),
           });
-          for (const event of recentAgentEvents.values()) {
-            toolbar.send<AgentOperationEvent>(SERVER_EVENTS.agentEvent, event);
-          }
         });
 
         toolbar.on<InspectSelectionMessage>(CLIENT_EVENTS.inspect, (message) => {
@@ -247,7 +253,7 @@ export default function buildWithAI(
                     ? 'Planning with the attached source selection…'
                     : `Planning with ${selections.length} attached source selections…`,
             });
-            const result = await agent.execute(
+            const result = await activeAgent.execute(
               {
                 instruction: message.instruction,
                 reason: 'The user explicitly chose Ask AI.',
@@ -305,9 +311,14 @@ export default function buildWithAI(
           const request = activeRequests.get(message.requestId);
           if (request !== undefined) request.abort();
         });
+        server?.httpServer?.once('close', () => { void activeAgent.dispose(); });
       },
     },
   };
+}
+
+export function isExternallyBound(host: string | boolean | undefined): boolean {
+  return host === true || (typeof host === 'string' && !['localhost', '127.0.0.1', '::1'].includes(host));
 }
 
 function sendError(

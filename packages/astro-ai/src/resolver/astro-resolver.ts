@@ -9,6 +9,7 @@ import type {
   DataProvenance,
   RepeatContext,
   SelectionContext,
+  SourceInsertionZone,
   SourceLocation,
 } from '../shared/selection-context.js';
 import { VisualCapabilityResolver } from '../visual/capability-resolver.js';
@@ -30,6 +31,8 @@ type AstNode = {
 type Declaration = {
   kind: 'local' | 'prop' | 'import' | 'external';
   location: SourceLocation;
+  sourceFile?: string;
+  sourceType?: DataProvenance['sourceType'];
 };
 
 type WalkState = {
@@ -37,6 +40,7 @@ type WalkState = {
   siblingGroupId?: string | undefined;
   parentComponents: SourceNodeRecord['parentComponents'];
   repeatContext?: RepeatContext | undefined;
+  structuralPath: string;
 };
 
 export type InstrumentedSource = {
@@ -51,13 +55,18 @@ export class AstroResolver {
   readonly #capabilities: VisualCapabilityResolver;
   readonly #nodes = new Map<string, SourceNodeRecord>();
   readonly #nodesByFile = new Map<string, Set<string>>();
+  readonly #indexCache = new Map<string, { sourceHash: string; nodes: SourceNodeRecord[] }>();
+  readonly #skillFiles: string[];
+  readonly #sourceLengths = new Map<string, number>();
 
   constructor(
     projectRoot: string,
     capabilities = new VisualCapabilityResolver(),
+    skillFiles: string[] = [],
   ) {
     this.#projectRoot = resolve(projectRoot);
     this.#capabilities = capabilities;
+    this.#skillFiles = [...skillFiles];
   }
 
   get projectRoot(): string {
@@ -104,20 +113,22 @@ export class AstroResolver {
   indexFile(filePath: string, source: string): SourceNodeRecord[] {
     const absoluteFile = this.toProjectFile(filePath);
     const projectFile = this.toProjectPath(absoluteFile);
+    const sourceHash = hash(source);
+    const cached = this.#indexCache.get(absoluteFile);
+    if (cached?.sourceHash === sourceHash) return cached.nodes;
     const sourceLanguage = getSourceLanguage(absoluteFile);
     const parsed = parseSource(source, sourceLanguage, projectFile);
-
-    this.removeFile(absoluteFile);
-
-    const sourceHash = hash(source);
+    this.#clearFileNodes(absoluteFile);
+    const lineStarts = getLineStarts(source);
     const declarations = collectDeclarations(
       parsed.declarationProgram,
       source,
       projectFile,
+      lineStarts,
     );
-    const lineStarts = getLineStarts(source);
     const nodes: SourceNodeRecord[] = [];
     const siblingGroups = new Map<string, SourceNodeRecord[]>();
+    const structuralOccurrences = new Map<string, number>();
 
     const walk = (value: unknown, state: WalkState): void => {
       if (Array.isArray(value)) {
@@ -147,7 +158,11 @@ export class AstroResolver {
           component &&
           hasHydrationDirective(opening.attributes);
         const location = toLocation(projectFile, value.start, value.end, lineStarts);
-        const nodeId = createNodeId(projectFile, value.start);
+        const structuralKey = `${state.structuralPath}/${name}`;
+        const occurrence = structuralOccurrences.get(structuralKey) ?? 0;
+        structuralOccurrences.set(structuralKey, occurrence + 1);
+        const structuralPath = `${structuralKey}[${occurrence}]`;
+        const nodeId = createNodeId(projectFile, structuralPath);
         const content = analyzeContent(
           value,
           source,
@@ -180,6 +195,7 @@ export class AstroResolver {
           filePath: absoluteFile,
           sourceLanguage,
           sourceHash,
+          structuralPath,
           source: location,
           range: { start: value.start, end: value.end },
           openingRange: { start: opening.start, end: opening.end },
@@ -199,6 +215,7 @@ export class AstroResolver {
             : { repeatContext: state.repeatContext }),
           hydratedIsland,
           instrumentable,
+          selfClosing: opening.selfClosing === true,
         };
 
         nodes.push(record);
@@ -222,6 +239,7 @@ export class AstroResolver {
           walk(child, {
             parentNodeId: nodeId,
             parentComponents: nextParents,
+            structuralPath,
             ...(state.repeatContext === undefined
               ? {}
               : { repeatContext: state.repeatContext }),
@@ -239,6 +257,7 @@ export class AstroResolver {
         for (const child of children) {
           walk(child, {
             ...state,
+            structuralPath: `${state.structuralPath}/fragment`,
             ...(child?.type === 'JSXElement'
               ? { siblingGroupId: fragmentId }
               : { siblingGroupId: undefined }),
@@ -256,6 +275,7 @@ export class AstroResolver {
           walk(child, {
             ...state,
             parentComponents: [...state.parentComponents, componentDefinition],
+            structuralPath: `${state.structuralPath}/component:${componentDefinition.name}`,
           });
         }
         return;
@@ -280,15 +300,18 @@ export class AstroResolver {
         walk(child, {
           parentNodeId: state.parentNodeId,
           parentComponents: state.parentComponents,
+          structuralPath: state.structuralPath,
           ...(nextRepeat === undefined ? {} : { repeatContext: nextRepeat }),
         });
       }
     };
 
-    walk(parsed.templateRoot, { parentComponents: [] });
+    walk(parsed.templateRoot, { parentComponents: [], structuralPath: 'root' });
     assignSafeSiblings(siblingGroups, source);
 
     this.#nodesByFile.set(absoluteFile, new Set(nodes.map(({ nodeId }) => nodeId)));
+    this.#indexCache.set(absoluteFile, { sourceHash, nodes });
+    this.#sourceLengths.set(absoluteFile, source.length);
     return nodes;
   }
 
@@ -309,6 +332,12 @@ export class AstroResolver {
       },
       parentComponents: node.parentComponents,
       capabilities,
+      relevantFiles: [...new Set([
+        node.source.file,
+        ...(node.dataProvenance.declaredAt === undefined ? [] : [node.dataProvenance.declaredAt.file]),
+        ...(node.dataProvenance.sourceFile === undefined ? [] : [node.dataProvenance.sourceFile]),
+      ])],
+      skillFiles: [...this.#skillFiles],
     };
   }
 
@@ -330,8 +359,43 @@ export class AstroResolver {
         });
   }
 
+  findInsertionPoints(filePath: string): SourceInsertionZone[] {
+    const absoluteFile = this.toProjectFile(filePath);
+    const projectFile = this.toProjectPath(absoluteFile);
+    const zones: SourceInsertionZone[] = [{
+      id: `${projectFile}:root`,
+      file: projectFile,
+      offset: this.#sourceLengths.get(absoluteFile) ?? 0,
+      acceptedChildTypes: ['*'],
+    }];
+    for (const node of this.listNodes(absoluteFile)) {
+      if (node.selfClosing || node.hydratedIsland || node.componentName === undefined) continue;
+      for (const slot of this.#capabilities.slotsFor(node.componentName)) {
+        zones.push({
+          id: `${node.nodeId}:slot:${slot.name}`,
+          file: projectFile,
+          offset: node.range.end - `</${node.componentName}>`.length,
+          parentNodeId: node.nodeId,
+          slot: slot.name,
+          acceptedChildTypes: slot.accepts ?? ['*'],
+        });
+      }
+    }
+    return zones;
+  }
+
+  acceptsSlot(parentComponent: string, slot: string, childType: string): boolean {
+    return this.#capabilities.acceptsSlot(parentComponent, slot, childType);
+  }
+
   removeFile(filePath: string): void {
     const absoluteFile = this.toProjectFile(filePath);
+    this.#clearFileNodes(absoluteFile);
+    this.#indexCache.delete(absoluteFile);
+    this.#sourceLengths.delete(absoluteFile);
+  }
+
+  #clearFileNodes(absoluteFile: string): void {
     const ids = this.#nodesByFile.get(absoluteFile);
     if (ids !== undefined) {
       for (const id of ids) this.#nodes.delete(id);
@@ -537,6 +601,8 @@ function classifyExpression(
         symbol,
         description: descriptions[declaration.kind],
         declaredAt: declaration.location,
+        ...(declaration.sourceFile === undefined ? {} : { sourceFile: declaration.sourceFile }),
+        ...(declaration.sourceType === undefined ? {} : { sourceType: declaration.sourceType }),
         readOnly: true,
       },
     };
@@ -546,7 +612,8 @@ function classifyExpression(
     expression?.start === undefined || expression.end === undefined
       ? ''
       : source.slice(expression.start, expression.end);
-  const external = /\b(fetch|getCollection|getEntry|Astro\.callAction)\b/.test(expressionText);
+  const sourceType = detectDataSource(expressionText);
+  const external = sourceType !== undefined;
   return {
     sourceKind: repeatContext === undefined
       ? external
@@ -556,8 +623,9 @@ function classifyExpression(
     dataProvenance: {
       kind: external ? 'external' : 'unknown',
       description: external
-        ? 'API, content, or action-backed content; read-only without an editable source integration.'
+        ? `${dataSourceLabel(sourceType)} content; read-only without an editable source integration.`
         : 'Generated or unresolved content; use source navigation or the agent fallback.',
+      ...(sourceType === undefined ? {} : { sourceType }),
       readOnly: true,
     },
   };
@@ -567,9 +635,9 @@ function collectDeclarations(
   program: AstNode | undefined,
   source: string,
   projectFile: string,
+  lineStarts: number[],
 ): Map<string, Declaration> {
   const declarations = new Map<string, Declaration>();
-  const lineStarts = getLineStarts(source);
   if (program === undefined) return declarations;
 
   const visit = (value: unknown): void => {
@@ -581,10 +649,15 @@ function collectDeclarations(
 
     if (value.type === 'ImportDeclaration') {
       const location = nodeLocation(value, projectFile, lineStarts);
+      const importSource = typeof value.source?.value === 'string' ? value.source.value : undefined;
+      const sourceType = importSource === undefined ? 'import' : detectImportSource(importSource);
+      const sourceFile = importSource?.startsWith('.') === true
+        ? resolveRelativeImport(projectFile, importSource)
+        : undefined;
       for (const specifier of value.specifiers ?? []) {
         const name = specifier?.local?.name;
         if (typeof name === 'string' && location !== undefined) {
-          declarations.set(name, { kind: 'import', location });
+          declarations.set(name, { kind: sourceType === 'import' ? 'import' : 'external', location, sourceType, ...(sourceFile === undefined ? {} : { sourceFile }) });
         }
       }
       return;
@@ -594,13 +667,15 @@ function collectDeclarations(
       const location = nodeLocation(value, projectFile, lineStarts);
       if (location === undefined) return;
       const declarationText = source.slice(value.start ?? 0, value.end ?? 0);
-      const external = /\b(fetch|getCollection|getEntry|Astro\.callAction)\b/.test(declarationText);
+      const sourceType = detectDataSource(declarationText);
+      const external = sourceType !== undefined;
       const fromProps = isAstroPropsMember(value.init) || isAstroPropsObject(value.init);
 
       if (value.id?.type === 'Identifier' && typeof value.id.name === 'string') {
         declarations.set(value.id.name, {
           kind: external ? 'external' : fromProps ? 'prop' : 'local',
           location,
+          ...(sourceType === undefined ? {} : { sourceType }),
         });
       } else if (value.id?.type === 'ObjectPattern') {
         for (const property of value.id.properties ?? []) {
@@ -609,6 +684,7 @@ function collectDeclarations(
             declarations.set(name, {
               kind: fromProps ? 'prop' : external ? 'external' : 'local',
               location,
+              ...(sourceType === undefined ? {} : { sourceType }),
             });
           }
         }
@@ -836,8 +912,45 @@ function isComponentName(name: string): boolean {
   return /^[A-Z]/.test(name) || name.includes('.');
 }
 
-function createNodeId(projectFile: string, start: number): string {
-  return createHash('sha256').update(`${projectFile}:${start}`).digest('hex').slice(0, 16);
+function detectImportSource(source: string): NonNullable<DataProvenance['sourceType']> {
+  if (source === 'astro:content') return 'content-collection';
+  if (source === 'astro:actions' || source.includes('/actions')) return 'action';
+  if (/graphql|apollo|urql/i.test(source)) return 'graphql';
+  return 'import';
+}
+
+function detectDataSource(source: string): DataProvenance['sourceType'] | undefined {
+  if (/\b(?:getCollection|getEntry|getEntries|render)\s*\(/.test(source)) return 'content-collection';
+  if (/\b(?:Astro\.callAction|actions\.|defineAction)\b/.test(source)) return 'action';
+  if (/\b(?:gql|graphql|useQuery|client\.query)\b/.test(source)) return 'graphql';
+  if (/\b(?:fetch|axios\.|ky\.|request)\s*\(/.test(source)) return 'api';
+  return undefined;
+}
+
+function dataSourceLabel(sourceType: NonNullable<DataProvenance['sourceType']>): string {
+  const labels = {
+    api: 'API',
+    action: 'Astro Action',
+    'content-collection': 'Astro Content Collection',
+    graphql: 'GraphQL',
+    import: 'Imported',
+  } as const;
+  return labels[sourceType];
+}
+
+function resolveRelativeImport(projectFile: string, source: string): string {
+  const segments = projectFile.split('/');
+  segments.pop();
+  for (const segment of source.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') segments.pop();
+    else segments.push(segment);
+  }
+  return segments.join('/');
+}
+
+function createNodeId(projectFile: string, structuralPath: string): string {
+  return createHash('sha256').update(`${projectFile}:${structuralPath}`).digest('hex').slice(0, 16);
 }
 
 function hash(source: string): string {

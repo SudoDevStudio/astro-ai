@@ -23,14 +23,12 @@ const ACTION_ATTRIBUTE = 'data-astro-ai-fix-action';
 export class DiagnosticActionBridge {
   readonly #callbacks: DiagnosticActionCallbacks;
   readonly #observer: MutationObserver;
-  readonly #timer: number;
   readonly #actions = new Set<HTMLButtonElement>();
 
   constructor(callbacks: DiagnosticActionCallbacks) {
     this.#callbacks = callbacks;
     this.#observer = new MutationObserver(() => this.scan());
     this.#observer.observe(document.documentElement, { childList: true, subtree: true });
-    this.#timer = window.setInterval(() => this.scan(), 750);
     this.scan();
   }
 
@@ -41,7 +39,6 @@ export class DiagnosticActionBridge {
 
   destroy(): void {
     this.#observer.disconnect();
-    window.clearInterval(this.#timer);
     for (const action of this.#actions) action.remove();
     this.#actions.clear();
   }

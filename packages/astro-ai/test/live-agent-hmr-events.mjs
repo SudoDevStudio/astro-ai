@@ -21,16 +21,18 @@ await waitForSocket(socket, 'open');
 let applied = false;
 
 try {
+  const applyEventPromise = waitForHmrEvent(socket);
   await transactions.commitBatch('agent', [{ file: pageFile, before, after }]);
   applied = true;
-  const applyEvent = await waitForHmrEvent(socket);
+  const applyEvent = await applyEventPromise;
   if (!['update', 'full-reload'].includes(applyEvent.type)) {
     throw new Error(`Unexpected agent apply HMR event: ${JSON.stringify(applyEvent)}`);
   }
 
+  const undoEventPromise = waitForHmrEvent(socket);
   await transactions.undo();
   applied = false;
-  const undoEvent = await waitForHmrEvent(socket);
+  const undoEvent = await undoEventPromise;
   if (!['update', 'full-reload'].includes(undoEvent.type)) {
     throw new Error(`Unexpected agent undo HMR event: ${JSON.stringify(undoEvent)}`);
   }

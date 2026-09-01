@@ -5,7 +5,9 @@ import test from 'node:test';
 import {
   CliAgentFallback,
   extractAgentResponse,
+  isExcludedDirectory,
   providerArguments,
+  resolveExcludedDirectories,
 } from '../dist/agent/cli-agent-fallback.js';
 
 test('builds non-interactive Codex arguments with a writable isolated sandbox', () => {
@@ -41,6 +43,22 @@ test('builds non-interactive Claude arguments without bypassing permissions', ()
     'acceptEdits',
   ]);
   assert.equal(args.includes('--dangerously-skip-permissions'), false);
+});
+
+test('merges safe project exclusions with the default agent workspace list', () => {
+  const excluded = resolveExcludedDirectories([
+    'vendor',
+    './src/generated/',
+    'public\\uploads',
+  ]);
+
+  assert.equal(excluded.has('node_modules'), true);
+  assert.equal(isExcludedDirectory('src/vendor', 'vendor', excluded), true);
+  assert.equal(isExcludedDirectory('src/generated', 'generated', excluded), true);
+  assert.equal(isExcludedDirectory('public/uploads', 'uploads', excluded), true);
+  assert.equal(isExcludedDirectory('src/components', 'components', excluded), false);
+  assert.throws(() => resolveExcludedDirectories(['../private']), /project-relative/);
+  assert.throws(() => resolveExcludedDirectories(['/tmp/cache']), /project-relative/);
 });
 
 test('reports a missing CLI without invoking an agent model', async () => {
@@ -116,4 +134,20 @@ test('answer-only mode discards generated edits for any provider adapter', async
     provider: 'claude',
     response: 'The selected component is declared in src/components/VisualCard.astro.',
   });
+});
+
+test('cancels a running provider process without creating a transaction', async () => {
+  const fallback = new CliAgentFallback({
+    provider: 'claude',
+    projectRoot: process.cwd(),
+    command: fileURLToPath(new URL('./fixtures/slow-claude.mjs', import.meta.url)),
+  });
+  const controller = new AbortController();
+  const operation = fallback.execute(
+    { instruction: 'Wait forever', reason: 'Cancellation test', signal: controller.signal },
+    { commitBatch() { throw new Error('Cancelled work must not commit.'); } },
+  );
+  setTimeout(() => controller.abort(), 30);
+  await assert.rejects(operation, { name: 'AbortError' });
+  await fallback.dispose();
 });

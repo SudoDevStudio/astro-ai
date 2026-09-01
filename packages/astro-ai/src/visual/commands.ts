@@ -17,7 +17,21 @@ export type SetLiteralPropCommand = {
   value: string | number | boolean;
 };
 
+export type RemoveSourceNodeCommand = { kind: 'remove-source-node'; nodeId: string };
+export type MoveToSlotCommand = { kind: 'move-to-slot'; nodeId: string; targetNodeId: string; slot: string };
+export type InsertLiteralElementCommand = {
+  kind: 'insert-literal-element';
+  file: string;
+  parentNodeId?: string;
+  slot?: string;
+  tag: string;
+  text: string;
+};
+
 export type DeterministicVisualCommand =
   | EditLiteralTextCommand
   | ReorderSiblingCommand
-  | SetLiteralPropCommand;
+  | SetLiteralPropCommand
+  | RemoveSourceNodeCommand
+  | MoveToSlotCommand
+  | InsertLiteralElementCommand;

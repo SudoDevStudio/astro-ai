@@ -151,6 +151,10 @@ export class ContextualActionBar {
       this.#callbacks.onAskAI([this.#context]);
       return;
     }
+    if (action === 'remove') {
+      this.#callbacks.onCommand({ kind: 'remove-source-node', nodeId: this.#context.selectedNode.nodeId });
+      return;
+    }
     this.#activeDetail = this.#activeDetail === action ? undefined : action;
     this.#render();
   }
@@ -253,7 +257,9 @@ export class ContextualActionBar {
     detail.append(previous, next);
     if (context.capabilities.movable && !context.capabilities.reorderable) {
       const note = element('p', 'muted');
-      note.textContent = 'No compatible declared target slot is available in this view.';
+      note.textContent = context.capabilities.allowedParentSlots.length === 0
+        ? 'No compatible declared target slot is available in this view.'
+        : `Compatible declared slots: ${context.capabilities.allowedParentSlots.join(', ')}. Drag onto a registered target component to move structurally.`;
       detail.append(note);
     }
     return detail;

@@ -28,7 +28,7 @@ export default defineToolbarApp({
     let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
     const drawer = new ChatDrawer({
-      onSubmit({ requestId, instruction, mode, attachments, externalContext }) {
+      onSubmit({ requestId, instruction, mode, attachments, locked, files, externalContext }) {
         server.send(CLIENT_EVENTS.agentInstruction, {
           requestId,
           instruction,
@@ -38,6 +38,8 @@ export default defineToolbarApp({
             : {
                 attachments: attachments.map(({ nodeId, route }) => ({ nodeId, route })),
               }),
+          ...(locked === true ? { locked: true } : {}),
+          ...(files === undefined ? {} : { files }),
           ...(externalContext === undefined ? {} : { externalContext }),
         });
         drawer.setNotice('AI agent operation started…');
@@ -166,7 +168,7 @@ export default defineToolbarApp({
             ? 'AI response completed without changing source.'
             : 'AI changes applied. Undo is available.'
           : event.state === 'failure'
-            ? 'The AI run failed. Review the agent workspace for details.'
+            ? 'The AI run failed. Review the message for details.'
             : `AI agent · ${humanize(event.state)}…`,
         event.state === 'failure',
       );

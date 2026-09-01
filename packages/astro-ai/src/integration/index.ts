@@ -20,6 +20,7 @@ import {
   type ClientReadyMessage,
   type AgentCancelMessage,
   type AgentInstructionMessage,
+  type AgentFileAttachment,
   type AgentOperationEvent,
   type ExecuteVisualCommandMessage,
   type HistoryCommandMessage,
@@ -36,6 +37,12 @@ import { buildAIVitePlugin } from '../vite/build-ai-plugin.js';
 
 const TOOLBAR_APP_ID = 'astro-ai';
 const TOOLBAR_APP_ENTRYPOINT = new URL('../toolbar/app.js', import.meta.url);
+const MAX_AGENT_FILE_ATTACHMENTS = 5;
+const MAX_AGENT_FILE_BYTES = 256_000;
+const MAX_AGENT_ATTACHMENT_BYTES = 512_000;
+const MAX_AGENT_IMAGE_BYTES = 5_000_000;
+const MAX_AGENT_IMAGE_ATTACHMENT_BYTES = 10_000_000;
+const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 export type BuildWithAIOptions = {
   agent?: CliAgentProvider | {
@@ -68,6 +75,67 @@ export function agentSelectionReferences(
   message: Pick<AgentInstructionMessage, 'attachments'>,
 ): NonNullable<AgentInstructionMessage['attachments']> {
   return message.attachments ?? [];
+}
+
+export function normalizeAgentFileAttachments(
+  files: AgentFileAttachment[] | undefined,
+): AgentFileAttachment[] {
+  if (files === undefined) return [];
+  if (!Array.isArray(files) || files.length > MAX_AGENT_FILE_ATTACHMENTS) {
+    throw new Error(`Attach no more than ${MAX_AGENT_FILE_ATTACHMENTS} files.`);
+  }
+  let totalBytes = 0;
+  let totalImageBytes = 0;
+  return files.map((file) => {
+    if (typeof file !== 'object' || file === null) throw new Error('Invalid file attachment.');
+    const name = typeof file.name === 'string' ? file.name.trim() : '';
+    const content = typeof file.content === 'string' ? file.content : '';
+    if (name === '' || name.length > 200 || /[\\/]/.test(name) || name === '.' || name === '..') {
+      throw new Error('Each attachment must use a plain file name without a path.');
+    }
+    const image = file.kind === 'image' || file.encoding === 'base64';
+    if (image) {
+      const mediaType = file.mediaType;
+      if (file.encoding !== 'base64' || typeof mediaType !== 'string' || !SUPPORTED_IMAGE_TYPES.has(mediaType)) {
+        throw new Error('Screenshots must be PNG, JPEG, WebP, or GIF images.');
+      }
+      if (!isCanonicalBase64(content)) throw new Error(`${name} contains invalid image data.`);
+      const size = Buffer.from(content, 'base64').byteLength;
+      if (size > MAX_AGENT_IMAGE_BYTES) {
+        throw new Error(`${name} exceeds the ${MAX_AGENT_IMAGE_BYTES / 1_000_000} MB image limit.`);
+      }
+      totalImageBytes += size;
+      if (totalImageBytes > MAX_AGENT_IMAGE_ATTACHMENT_BYTES) {
+        throw new Error(`Images exceed the ${MAX_AGENT_IMAGE_ATTACHMENT_BYTES / 1_000_000} MB total limit.`);
+      }
+      return {
+        name,
+        content,
+        size,
+        mediaType,
+        kind: 'image' as const,
+        encoding: 'base64' as const,
+      };
+    }
+    if (content.includes('\0')) throw new Error('Only text files and supported images can be attached.');
+    const size = Buffer.byteLength(content);
+    if (size > MAX_AGENT_FILE_BYTES) {
+      throw new Error(`${name} exceeds the ${Math.round(MAX_AGENT_FILE_BYTES / 1_000)} KB attachment limit.`);
+    }
+    totalBytes += size;
+    if (totalBytes > MAX_AGENT_ATTACHMENT_BYTES) {
+      throw new Error(`Attachments exceed the ${Math.round(MAX_AGENT_ATTACHMENT_BYTES / 1_000)} KB total limit.`);
+    }
+    const mediaType = typeof file.mediaType === 'string' && file.mediaType.length <= 100
+      ? file.mediaType
+      : undefined;
+    return { name, content, size, ...(mediaType === undefined ? {} : { mediaType }) };
+  });
+}
+
+function isCanonicalBase64(value: string): boolean {
+  if (value === '' || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return false;
+  return Buffer.from(value, 'base64').toString('base64') === value;
 }
 
 export default function buildWithAI(
@@ -269,16 +337,25 @@ export default function buildWithAI(
           activeRequests.set(message.requestId, controller);
           try {
             const references = agentSelectionReferences(message);
+            const files = normalizeAgentFileAttachments(message.files);
             const selections = references.map(({ nodeId, route }) => (
               activeResolver.resolveSelection(nodeId, route)
             ));
+            if (message.locked === true && selections.length === 0) {
+              throw new Error('A locked AI edit scope requires at least one resolved source selection.');
+            }
+            const editableFiles = message.locked === true
+              ? [...new Set(selections.map(({ selectedNode }) => selectedNode.source.file))]
+              : undefined;
             sendAgentEvent({
               requestId: message.requestId,
               state: 'planning',
               message: message.externalContext !== undefined
                 ? `Planning a fix for the attached ${message.externalContext.kind}…`
-                : selections.length === 0
+                : selections.length === 0 && files.length === 0
                   ? 'Planning a page-level change…'
+                  : selections.length === 0
+                    ? `Planning with ${files.length} attached file${files.length === 1 ? '' : 's'}…`
                   : selections.length === 1
                     ? 'Planning with the attached source selection…'
                     : `Planning with ${selections.length} attached source selections…`,
@@ -289,9 +366,11 @@ export default function buildWithAI(
                 reason: 'The user explicitly chose Ask AI.',
                 mode: message.mode ?? 'auto',
                 ...(selections.length === 0 ? {} : { selections }),
+                ...(editableFiles === undefined ? {} : { editableFiles }),
                 ...(message.externalContext === undefined
                   ? {}
                   : { externalContext: message.externalContext }),
+                ...(files.length === 0 ? {} : { files }),
                 signal: controller.signal,
                 onProgress(state, progressMessage) {
                   sendAgentEvent({

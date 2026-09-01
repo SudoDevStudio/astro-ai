@@ -6,7 +6,28 @@ import buildWithAI, {
   agentSelectionReferences,
   BUILD_AI_VITE_PLUGIN_NAME,
   isExternallyBound,
+  normalizeAgentFileAttachments,
 } from '../dist/integration/index.js';
+
+test('validates browser file attachments before they reach a CLI provider', () => {
+  assert.deepEqual(normalizeAgentFileAttachments([{
+    name: 'notes.md', content: '# Notes', size: 7, mediaType: 'text/markdown',
+  }]), [{ name: 'notes.md', content: '# Notes', size: 7, mediaType: 'text/markdown' }]);
+  assert.throws(() => normalizeAgentFileAttachments([{
+    name: '../secret.txt', content: 'no', size: 2,
+  }]), /file name/i);
+  assert.throws(() => normalizeAgentFileAttachments([{
+    name: 'binary.dat', content: 'a\0b', size: 3,
+  }]), /text files/i);
+  assert.deepEqual(normalizeAgentFileAttachments([{
+    name: 'screen.png', content: 'iVBORw==', size: 99, mediaType: 'image/png', kind: 'image', encoding: 'base64',
+  }]), [{
+    name: 'screen.png', content: 'iVBORw==', size: 4, mediaType: 'image/png', kind: 'image', encoding: 'base64',
+  }]);
+  assert.throws(() => normalizeAgentFileAttachments([{
+    name: 'screen.png', content: 'not-base64', size: 10, mediaType: 'image/png', kind: 'image', encoding: 'base64',
+  }]), /invalid image data/i);
+});
 import { AstroResolver } from '../dist/resolver/astro-resolver.js';
 import { buildAIVitePlugin } from '../dist/vite/build-ai-plugin.js';
 import {

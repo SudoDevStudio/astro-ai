@@ -48,6 +48,137 @@ test('opens, minimizes, expands, and destroys the chat lifecycle', () => {
   } finally { cleanup(); }
 });
 
+test('keeps an explicitly attached source selection when the visual menu closes', () => {
+  const cleanup = installDom('<main></main>');
+  try {
+    const submissions = [];
+    const drawer = new ChatDrawer({
+      onSubmit(request) { submissions.push(request); },
+      onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
+    });
+    drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
+    drawer.openWithSelections([selectionContext()]);
+    assert.equal(drawer.element.dataset.attachmentState, 'attached');
+
+    drawer.element.querySelector('[aria-label="Lock AI edits to attached files"]').click();
+    assert.equal(drawer.element.dataset.attachmentState, 'locked');
+    drawer.element.querySelector('[aria-label="Unlock AI edit scope"]').click();
+    assert.equal(drawer.element.dataset.attachmentState, 'attached');
+    drawer.element.querySelector('[aria-label="Lock AI edits to attached files"]').click();
+
+    // The hover menu closing temporarily empties the overlay selection. It is
+    // not an explicit request to remove the file already attached to chat.
+    drawer.setCurrentSelections([]);
+
+    const input = drawer.element.querySelector('textarea');
+    input.value = 'Explain this component';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    drawer.element.querySelector('form').requestSubmit();
+    assert.deepEqual(submissions[0].attachments?.map(({ nodeId, source }) => ({ nodeId, file: source.file })), [
+      { nodeId: 'node-1', file: 'src/page.astro' },
+    ]);
+    assert.equal(submissions[0].locked, true);
+    drawer.destroy();
+  } finally { cleanup(); }
+});
+
+test('scrolls restored chat history to the latest message after HMR', async () => {
+  const cleanup = installDom('<main></main>');
+  try {
+    sessionStorage.setItem('astro-ai:drawer-runs', JSON.stringify([
+      persistedRun('first-run', 'First message', 1),
+      persistedRun('last-run', 'Latest message', 2),
+    ]));
+    const drawer = new ChatDrawer({ onSubmit() {}, onCancel() {}, onUndo() {}, onRedo() {}, onClose() {} });
+    const messages = drawer.element.querySelector('.chat-messages');
+    Object.defineProperty(messages, 'scrollHeight', { configurable: true, value: 1200 });
+    messages.scrollTop = 0;
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+    assert.equal(messages.scrollTop, 1200);
+    assert.equal(drawer.element.querySelectorAll('.user-message p')[1]?.textContent, 'Latest message');
+    drawer.destroy();
+  } finally { cleanup(); }
+});
+
+test('attaches, displays, removes, and submits text files with a chat message', async () => {
+  const cleanup = installDom('<main></main>');
+  try {
+    const submissions = [];
+    const drawer = new ChatDrawer({
+      onSubmit(request) { submissions.push(request); },
+      onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
+    });
+    drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
+    await drawer.attachFiles([{
+      name: 'notes.md',
+      size: 12,
+      type: 'text/markdown',
+      async text() { return '# Reference'; },
+    }]);
+    assert.equal(drawer.element.querySelector('[data-file-name="notes.md"]')?.textContent.includes('notes.md'), true);
+    drawer.element.querySelector('[aria-label="Remove notes.md"]').click();
+    assert.equal(drawer.element.querySelector('[data-file-name="notes.md"]'), null);
+    await drawer.attachFiles([{
+      name: 'notes.md',
+      size: 12,
+      type: 'text/markdown',
+      async text() { return '# Reference'; },
+    }]);
+    const input = drawer.element.querySelector('textarea');
+    input.value = 'Use this file';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    drawer.element.querySelector('form').requestSubmit();
+    assert.deepEqual(submissions[0].files, [{
+      name: 'notes.md',
+      content: '# Reference',
+      size: 11,
+      mediaType: 'text/markdown',
+    }]);
+    assert.equal(drawer.element.querySelector('[data-file-name="notes.md"]'), null);
+    drawer.destroy();
+  } finally { cleanup(); }
+});
+
+test('pastes a clipboard screenshot into the composer as an image attachment', async () => {
+  const cleanup = installDom('<main></main>');
+  try {
+    const submissions = [];
+    const drawer = new ChatDrawer({
+      onSubmit(request) { submissions.push(request); },
+      onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
+    });
+    drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
+    const screenshot = {
+      name: 'screenshot.png',
+      size: 4,
+      type: 'image/png',
+      async text() { return ''; },
+      async arrayBuffer() { return new Uint8Array([137, 80, 78, 71]).buffer; },
+    };
+    const input = drawer.element.querySelector('textarea');
+    const paste = new window.Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: { items: [{ kind: 'file', type: 'image/png', getAsFile() { return screenshot; } }] },
+    });
+    input.dispatchEvent(paste);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    assert.equal(paste.defaultPrevented, true);
+    assert.equal(drawer.element.querySelector('[data-file-name="screenshot.png"] img') !== null, true);
+    input.value = 'Use this screenshot';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    drawer.element.querySelector('form').requestSubmit();
+    assert.deepEqual(submissions[0].files, [{
+      name: 'screenshot.png',
+      content: 'iVBORw==',
+      size: 4,
+      mediaType: 'image/png',
+      kind: 'image',
+      encoding: 'base64',
+    }]);
+    drawer.destroy();
+  } finally { cleanup(); }
+});
+
 test('discovers and invokes a deterministic insertion zone from the overlay', () => {
   const cleanup = installDom('<main></main>');
   try {
@@ -109,6 +240,18 @@ function selectionContext() {
     },
     relevantFiles: ['src/page.astro'],
     skillFiles: [],
+  };
+}
+
+function persistedRun(requestId, instruction, startedAt) {
+  return {
+    requestId,
+    instruction,
+    startedAt,
+    status: 'completed',
+    title: 'Response',
+    summary: 'Done',
+    steps: [],
   };
 }
 

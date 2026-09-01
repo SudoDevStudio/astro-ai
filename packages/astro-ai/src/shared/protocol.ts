@@ -76,11 +76,22 @@ export type AgentExternalContext = {
 
 export type AgentRequestMode = 'auto' | 'answer';
 
+export type AgentFileAttachment = {
+  name: string;
+  content: string;
+  size: number;
+  mediaType?: string;
+  kind?: 'text' | 'image';
+  encoding?: 'utf8' | 'base64';
+};
+
 export type AgentInstructionMessage = {
   requestId: string;
   instruction: string;
   mode?: AgentRequestMode;
   attachments?: AgentSelectionReference[];
+  locked?: boolean;
+  files?: AgentFileAttachment[];
   externalContext?: AgentExternalContext;
 };
 

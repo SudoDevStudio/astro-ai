@@ -1,5 +1,9 @@
 import type { SelectionContext } from '../shared/selection-context.js';
-import type { AgentExternalContext, AgentRequestMode } from '../shared/protocol.js';
+import type {
+  AgentExternalContext,
+  AgentFileAttachment,
+  AgentRequestMode,
+} from '../shared/protocol.js';
 import type {
   PatchTransactionStore,
   PatchTransactionSummary,
@@ -10,7 +14,10 @@ export type AgentFallbackRequest = {
   reason: string;
   mode?: AgentRequestMode;
   selections?: SelectionContext[];
+  /** Project-relative files that the provider may modify. Undefined means project-wide. */
+  editableFiles?: string[];
   externalContext?: AgentExternalContext;
+  files?: AgentFileAttachment[];
   signal?: AbortSignal;
   onProgress?(state: AgentProgressState, message: string): void;
 };

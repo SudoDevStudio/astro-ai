@@ -39,6 +39,7 @@ codex login
 - Multi-select by Shift-click or drag marquee.
 - Undo, redo, conflict recovery, and human-readable diffs.
 - Ask Codex or Claude for explanations and code changes.
+- Attach text, code, or screenshots by picker, drag-and-drop, or clipboard paste.
 - Attach Vite errors and Astro audit findings with **Fix with AI**.
 
 ## Options
@@ -75,6 +76,10 @@ with agent context.
 Toolbar history is stored in the browser tab's `sessionStorage`; it is not
 mirrored into Codex or Claude chat applications. Credentials remain in the CLI
 credential store and are never sent to browser code.
+
+Attached contents are sent only with that CLI request and are not stored in
+chat history. Up to five attachments are supported. Text files are limited to
+256 KB each and screenshots to 5 MB each.
 
 For safety, the agent bridge is disabled when Astro listens beyond loopback.
 Only set `allowNetworkAgent: true` on a trusted private network.

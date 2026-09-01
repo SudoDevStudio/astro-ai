@@ -1,5 +1,6 @@
 import type {
   AgentExternalContext,
+  AgentFileAttachment,
   AgentOperationEvent,
   AgentOperationState,
   AgentRequestMode,
@@ -17,6 +18,8 @@ export type AgentSubmit = {
   instruction: string;
   mode: AgentRequestMode;
   attachments?: SelectionAttachment[];
+  locked?: boolean;
+  files?: AgentFileAttachment[];
   externalContext?: AgentExternalContext;
 };
 
@@ -43,6 +46,7 @@ type PersistedRun = {
   requestId: string;
   instruction: string;
   attachments?: SelectionAttachment[];
+  files?: FileAttachmentSummary[];
   externalContext?: AgentExternalContext;
   startedAt: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
@@ -55,6 +59,10 @@ type PersistedRun = {
 type SelectionAnchor = Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom' | 'width' | 'height'>;
 type ChatWindowPosition = { left: number; top: number };
 type ChatWindowSize = { width: number; height: number };
+type FileAttachmentSummary = Pick<AgentFileAttachment, 'name' | 'size' | 'mediaType'>;
+type ReadableFile = Pick<File, 'name' | 'size' | 'type' | 'text'> & {
+  arrayBuffer?(): Promise<ArrayBuffer>;
+};
 
 const TERMINAL_STATES = new Set<AgentOperationState>([
   'completion',
@@ -67,6 +75,12 @@ const DRAWER_CONTEXT_KEY = 'astro-ai:drawer-context';
 const DRAWER_RUNS_KEY = 'astro-ai:drawer-runs';
 const DRAWER_POSITION_KEY = 'astro-ai:drawer-position';
 const DRAWER_MODE_KEY = 'astro-ai:drawer-answer-only';
+const MAX_FILE_ATTACHMENTS = 5;
+const MAX_FILE_BYTES = 256_000;
+const MAX_TOTAL_FILE_BYTES = 512_000;
+const MAX_IMAGE_BYTES = 5_000_000;
+const MAX_TOTAL_IMAGE_BYTES = 10_000_000;
+const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 export class ChatDrawer {
   readonly element: HTMLElement;
@@ -77,6 +91,9 @@ export class ChatDrawer {
   readonly #emptyState: HTMLDivElement;
   readonly #composer: HTMLFormElement;
   readonly #input: HTMLTextAreaElement;
+  readonly #fileTray: HTMLDivElement;
+  readonly #fileInput: HTMLInputElement;
+  readonly #attach: HTMLButtonElement;
   readonly #submit: HTMLButtonElement;
   readonly #cancel: HTMLButtonElement;
   readonly #mode: HTMLButtonElement;
@@ -92,6 +109,7 @@ export class ChatDrawer {
   #provider: ServerReadyMessage['agent'] | undefined;
   #currentSelections: SelectionContext[] = [];
   #attachments: SelectionAttachment[] = [];
+  #files: AgentFileAttachment[] = [];
   #externalContext: AgentExternalContext | undefined;
   #locked = false;
   #minimized = false;
@@ -142,7 +160,7 @@ export class ChatDrawer {
     const eyebrow = element('span', 'drawer-eyebrow');
     eyebrow.textContent = 'Build with AI';
     const title = document.createElement('h2');
-    title.textContent = 'Agent workspace';
+    title.textContent = 'AI assistant';
     titles.append(eyebrow, title);
     identity.append(mark, titles);
     const headerActions = element('div', 'drawer-header-actions');
@@ -188,16 +206,30 @@ export class ChatDrawer {
 
     this.#composer = element('form', 'chat-composer');
     const composerFrame = element('div', 'composer-frame');
+    this.#fileTray = element('div', 'file-tray');
+    this.#fileTray.hidden = true;
+    this.#fileInput = document.createElement('input');
+    this.#fileInput.type = 'file';
+    this.#fileInput.multiple = true;
+    this.#fileInput.hidden = true;
+    this.#fileInput.accept = 'image/png,image/jpeg,image/webp,image/gif,text/*,.astro,.js,.jsx,.ts,.tsx,.json,.md,.mdx,.css,.scss,.sass,.less,.html,.yaml,.yml,.toml,.xml,.svg,.env,.txt';
+    this.#fileInput.addEventListener('change', () => {
+      void this.attachFiles([...(this.#fileInput.files ?? [])]);
+      this.#fileInput.value = '';
+    });
     this.#input = document.createElement('textarea');
     this.#input.rows = 3;
     this.#input.placeholder = 'Ask about the project or request a change…';
     this.#input.setAttribute('aria-label', 'Agent instruction');
     this.#input.addEventListener('keydown', this.#onComposerKeyDown);
+    this.#input.addEventListener('paste', this.#onPaste);
     this.#input.addEventListener('input', () => this.#syncComposer());
     const composerFooter = element('div', 'composer-footer');
     const shortcut = element('span', 'shortcut-hint');
     shortcut.textContent = 'Enter to send · Shift+Enter for new line';
     const composerActions = element('div', 'composer-actions');
+    this.#attach = iconButton('📎', 'Attach text or code files', () => this.#fileInput.click());
+    this.#attach.classList.add('attach-button');
     this.#mode = button('Answer only', () => {
       this.#answerOnly = !this.#answerOnly;
       writeSession(DRAWER_MODE_KEY, String(this.#answerOnly));
@@ -214,9 +246,23 @@ export class ChatDrawer {
     this.#submit.className = 'send-button';
     this.#submit.type = 'submit';
     this.#submit.disabled = true;
-    composerActions.append(this.#mode, this.#cancel, this.#submit);
+    composerActions.append(this.#attach, this.#mode, this.#cancel, this.#submit);
     composerFooter.append(shortcut, composerActions);
-    composerFrame.append(this.#input, composerFooter);
+    composerFrame.append(this.#fileTray, this.#fileInput, this.#input, composerFooter);
+    composerFrame.addEventListener('dragover', (event) => {
+      if (event.dataTransfer?.types.includes('Files') !== true) return;
+      event.preventDefault();
+      composerFrame.dataset.draggingFile = 'true';
+    });
+    composerFrame.addEventListener('dragleave', () => {
+      composerFrame.dataset.draggingFile = 'false';
+    });
+    composerFrame.addEventListener('drop', (event) => {
+      if (event.dataTransfer?.files === undefined) return;
+      event.preventDefault();
+      composerFrame.dataset.draggingFile = 'false';
+      void this.attachFiles([...event.dataTransfer.files]);
+    });
     this.#composer.append(composerFrame);
     this.#composer.addEventListener('submit', this.#onSubmit);
 
@@ -230,6 +276,7 @@ export class ChatDrawer {
     window.addEventListener('scroll', this.#scheduleConnector, true);
     window.addEventListener('resize', this.#onViewportResize);
     this.#renderContext();
+    this.#renderFiles();
     this.#restoreRuns();
     this.#syncComposer();
     this.#setMinimized(this.#minimized, false);
@@ -255,11 +302,98 @@ export class ChatDrawer {
       .map(({ requestId }) => requestId);
   }
 
+  async attachFiles(files: ReadonlyArray<ReadableFile>): Promise<void> {
+    let errorMessage: string | undefined;
+    for (const file of files) {
+      if (this.#files.length >= MAX_FILE_ATTACHMENTS) {
+        errorMessage = `Attach no more than ${MAX_FILE_ATTACHMENTS} files.`;
+        break;
+      }
+      const image = SUPPORTED_IMAGE_TYPES.has(file.type);
+      const displayName = file.name.trim() || `screenshot-${Date.now()}.png`;
+      if (file.type.startsWith('image/') && !image && file.type !== 'image/svg+xml') {
+        errorMessage = `${displayName} is not a supported screenshot format.`;
+        continue;
+      }
+      if (image && file.size > MAX_IMAGE_BYTES) {
+        errorMessage = `${displayName} exceeds the ${MAX_IMAGE_BYTES / 1_000_000} MB image limit.`;
+        continue;
+      }
+      if (!image && file.size > MAX_FILE_BYTES) {
+        errorMessage = `${file.name} exceeds the ${Math.round(MAX_FILE_BYTES / 1_000)} KB limit.`;
+        continue;
+      }
+      try {
+        if (image) {
+          if (file.arrayBuffer === undefined) throw new Error('Image data is unavailable.');
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const total = this.#files
+            .filter(({ kind }) => kind === 'image')
+            .reduce((sum, attachment) => sum + attachment.size, 0) + bytes.byteLength;
+          if (bytes.byteLength > MAX_IMAGE_BYTES || total > MAX_TOTAL_IMAGE_BYTES) {
+            errorMessage = total > MAX_TOTAL_IMAGE_BYTES
+              ? `Images exceed the ${MAX_TOTAL_IMAGE_BYTES / 1_000_000} MB total limit.`
+              : `${displayName} exceeds the ${MAX_IMAGE_BYTES / 1_000_000} MB image limit.`;
+            continue;
+          }
+          this.#files.push({
+            name: displayName,
+            content: base64FromBytes(bytes),
+            size: bytes.byteLength,
+            mediaType: file.type,
+            kind: 'image',
+            encoding: 'base64',
+          });
+          continue;
+        }
+        const content = await file.text();
+        const size = new TextEncoder().encode(content).byteLength;
+        const total = this.#files.reduce((sum, attachment) => sum + attachment.size, 0) + size;
+        if (content.includes('\0')) {
+          errorMessage = `${file.name} is not a supported text file.`;
+          continue;
+        }
+        if (size > MAX_FILE_BYTES || total > MAX_TOTAL_FILE_BYTES) {
+          errorMessage = total > MAX_TOTAL_FILE_BYTES
+            ? `Attachments exceed the ${Math.round(MAX_TOTAL_FILE_BYTES / 1_000)} KB total limit.`
+            : `${file.name} exceeds the ${Math.round(MAX_FILE_BYTES / 1_000)} KB limit.`;
+          continue;
+        }
+        this.#files.push({
+          name: displayName,
+          content,
+          size,
+          ...(file.type === '' ? {} : { mediaType: file.type }),
+        });
+      } catch {
+        errorMessage = `Could not read ${file.name}.`;
+      }
+    }
+    this.#renderFiles();
+    if (errorMessage !== undefined) this.setNotice(errorMessage, true);
+  }
+
+  readonly #onPaste = (event: ClipboardEvent): void => {
+    const images = [...(event.clipboardData?.items ?? [])].flatMap((item) => {
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) return [];
+      const file = item.getAsFile();
+      return file === null ? [] : [file];
+    });
+    if (images.length === 0) return;
+    event.preventDefault();
+    void this.attachFiles(images);
+  };
+
   setCurrentSelections(contexts: SelectionContext[]): void {
     this.#currentSelections = [...contexts];
-    this.#externalContext = undefined;
-    if (!this.#locked) {
-      this.#attachments = contexts.map(createSelectionAttachment);
+    // An empty overlay selection can be transient (for example, when the
+    // toolbar's hover menu closes). Keep the composer attachment until the
+    // user explicitly removes it; a new source selection may still replace it.
+    if (contexts.length > 0) {
+      this.#externalContext = undefined;
+      if (!this.#locked) {
+        this.#attachments = contexts.map(createSelectionAttachment);
+      }
     }
     this.#renderContext();
   }
@@ -320,6 +454,7 @@ export class ChatDrawer {
     else this.#setMinimized(this.#minimized, false);
     this.#renderContext();
     this.#scheduleConnector();
+    this.#scrollToLatest();
     requestAnimationFrame(() => {
       this.#constrainPosition();
       if (focus) this.#input.focus();
@@ -452,6 +587,11 @@ export class ChatDrawer {
     this.#context.replaceChildren();
     const contextKind = this.#externalContext?.kind ?? (this.#attachments.length === 0 ? 'page' : 'selection');
     this.element.dataset.context = contextKind;
+    this.element.dataset.attachmentState = this.#attachments.length === 0
+      ? 'none'
+      : this.#locked
+        ? 'locked'
+        : 'attached';
     this.#scheduleConnector();
     const contextCopy = element('div', 'context-copy');
     const contextEyebrow = element('span', 'context-eyebrow');
@@ -459,9 +599,11 @@ export class ChatDrawer {
       ? `Attached ${this.#externalContext.kind}`
       : this.#attachments.length === 0
         ? 'Page-level scope'
-        : this.#attachments.length === 1
-          ? 'Attached selection'
-          : 'Attached selections';
+        : this.#locked
+          ? 'Locked edit scope'
+          : this.#attachments.length === 1
+            ? 'Attached selection'
+            : 'Attached selections';
     const label = element('div', 'context-label');
     if (this.#externalContext !== undefined) {
       const tag = element('span', 'tag-pill');
@@ -507,7 +649,7 @@ export class ChatDrawer {
         this.#renderContext();
       });
       useCurrent.disabled = this.#currentSelections.length === 0 || this.#locked;
-      const lock = iconButton(this.#locked ? '●' : '○', this.#locked ? 'Unlock attachment' : 'Lock attachment', () => {
+      const lock = iconButton(this.#locked ? '●' : '○', this.#locked ? 'Unlock AI edit scope' : 'Lock AI edits to attached files', () => {
         this.#locked = !this.#locked;
         this.#renderContext();
       });
@@ -532,11 +674,41 @@ export class ChatDrawer {
     );
   }
 
+  #renderFiles(): void {
+    this.#fileTray.replaceChildren();
+    this.#fileTray.hidden = this.#files.length === 0;
+    for (const file of this.#files) {
+      const chip = element('span', 'file-chip');
+      chip.dataset.fileName = file.name;
+      chip.title = `${file.name} · ${formatFileSize(file.size)}`;
+      const icon = file.kind === 'image'
+        ? document.createElement('img')
+        : element('span', 'file-icon');
+      icon.className = file.kind === 'image' ? 'file-preview' : 'file-icon';
+      if (file.kind === 'image') {
+        icon.setAttribute('alt', '');
+        icon.setAttribute('src', `data:${file.mediaType};base64,${file.content}`);
+      } else {
+        icon.textContent = '▤';
+      }
+      const name = element('span', 'file-name');
+      name.textContent = file.name;
+      const remove = iconButton('×', `Remove ${file.name}`, () => {
+        this.#files = this.#files.filter((candidate) => candidate !== file);
+        this.#renderFiles();
+      });
+      remove.classList.add('file-remove');
+      chip.append(icon, name, remove);
+      this.#fileTray.append(chip);
+    }
+  }
+
   #createRun(
     requestId: string,
     instruction: string,
     attachments?: SelectionAttachment[],
     externalContext?: AgentExternalContext,
+    files?: FileAttachmentSummary[],
     startedAt = Date.now(),
     persist = true,
   ): RunView {
@@ -546,18 +718,25 @@ export class ChatDrawer {
     const userText = document.createElement('p');
     userText.textContent = instruction;
     const scope = element('span', 'message-scope');
-    scope.textContent = externalContext !== undefined
+    const sourceScope = externalContext !== undefined
       ? `${externalContext.kind === 'error' ? 'Error' : 'Audit'} · ${externalContext.file ?? externalContext.title}`
       : attachments === undefined || attachments.length === 0
         ? 'Page-level'
         : attachments.length === 1 && attachments[0] !== undefined
           ? `${attachments[0].label} · ${middleTruncatePath(attachments[0].source.file, 28)}:${attachments[0].source.start.line}`
           : `${attachments.length} selected elements`;
-    scope.title = externalContext !== undefined
+    const fileScope = files === undefined || files.length === 0
+      ? ''
+      : ` · ${files.length} file${files.length === 1 ? '' : 's'}`;
+    scope.textContent = `${sourceScope}${fileScope}`;
+    const sourceTitle = externalContext !== undefined
       ? externalContext.message
       : attachments === undefined || attachments.length === 0
         ? 'No source element attached'
         : attachments.map(({ source }) => `${source.file}:${source.start.line}`).join('\n');
+    scope.title = [sourceTitle, ...(files ?? []).map(({ name, size }) => `${name} · ${formatFileSize(size)}`)]
+      .filter(Boolean)
+      .join('\n');
     userMessage.append(userText, scope);
 
     const runRoot = element('section', 'agent-run');
@@ -583,6 +762,7 @@ export class ChatDrawer {
         requestId,
         instruction,
         ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+        ...(files === undefined || files.length === 0 ? {} : { files }),
         ...(externalContext === undefined ? {} : { externalContext }),
         startedAt,
         status: 'running',
@@ -659,6 +839,7 @@ export class ChatDrawer {
         persisted.instruction,
         persisted.attachments,
         persisted.externalContext,
+        persisted.files,
         persisted.startedAt,
         false,
       );
@@ -681,6 +862,7 @@ export class ChatDrawer {
     }
     this.#emptyState.hidden = this.#runs.size > 0;
     this.#syncElapsedTimer();
+    if (this.#runs.size > 0) this.#scrollToLatest();
   }
 
   #renderDiff(run: RunView, diff: string): void {
@@ -710,6 +892,8 @@ export class ChatDrawer {
     this.#submit.disabled = running || !connected || this.#input.value.trim() === '';
     this.#cancel.hidden = !running;
     this.#mode.disabled = running;
+    this.#attach.disabled = running || !connected;
+    this.#fileInput.disabled = running || !connected;
     this.#mode.setAttribute('aria-pressed', String(this.#answerOnly));
     this.#mode.textContent = this.#answerOnly ? 'Answer only ✓' : 'Answer only';
     if (!connected && this.#provider !== undefined) {
@@ -755,13 +939,19 @@ export class ChatDrawer {
     const attachments = this.#attachments.length === 0
       ? undefined
       : cloneAttachments(this.#attachments);
+    const files = this.#files.length === 0
+      ? undefined
+      : this.#files.map((file) => ({ ...file }));
+    const fileSummaries = files?.map(({ content: _content, ...summary }) => summary);
     const externalContext = this.#externalContext === undefined
       ? undefined
       : { ...this.#externalContext };
     this.#activeRequestId = requestId;
     this.#submittedDrafts.set(requestId, instruction);
-    this.#createRun(requestId, instruction, attachments, externalContext);
+    this.#createRun(requestId, instruction, attachments, externalContext, fileSummaries);
     this.#input.value = '';
+    this.#files = [];
+    this.#renderFiles();
     this.#syncComposer();
     this.#scrollToLatest();
     this.#callbacks.onSubmit({
@@ -769,6 +959,8 @@ export class ChatDrawer {
       instruction,
       mode: this.#answerOnly ? 'answer' : 'auto',
       ...(attachments === undefined ? {} : { attachments }),
+      ...(this.#locked && attachments !== undefined ? { locked: true } : {}),
+      ...(files === undefined ? {} : { files }),
       ...(externalContext === undefined ? {} : { externalContext }),
     });
   };
@@ -960,7 +1152,16 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .drawer-notice[data-state='error'] { color: #fda4af; }
     .drawer-notice[data-state='error']::before { background: #ef4444; }
     .drawer-body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; }
-    .chat-context { align-items: center; background: #12161d; border-bottom: 1px solid #292f3a; display: flex; gap: 12px; justify-content: space-between; padding: 10px 14px; }
+    .chat-context { align-items: center; background: #12161d; border-bottom: 1px solid #292f3a; display: flex; gap: 12px; justify-content: space-between; padding: 10px 14px; transition: background .15s, border-color .15s, box-shadow .15s; }
+    .ai-chat-drawer[data-attachment-state='attached'] .chat-context { background: linear-gradient(90deg, rgb(8 47 73 / .94), rgb(14 116 144 / .42)); border-bottom-color: #0891b2; box-shadow: inset 4px 0 #22d3ee; }
+    .ai-chat-drawer[data-attachment-state='attached'] .context-eyebrow { color: #67e8f9; }
+    .ai-chat-drawer[data-attachment-state='attached'] .context-label { color: #ecfeff; }
+    .ai-chat-drawer[data-attachment-state='attached'] .tag-pill { background: #155e75; border-color: #22d3ee; color: #ecfeff; }
+    .ai-chat-drawer[data-attachment-state='locked'] .chat-context { background: linear-gradient(90deg, rgb(120 53 15 / .66), rgb(69 26 3 / .34)); border-bottom-color: #b45309; box-shadow: inset 3px 0 #f59e0b; }
+    .ai-chat-drawer[data-attachment-state='locked'] .context-eyebrow { color: #fcd34d; }
+    .ai-chat-drawer[data-attachment-state='locked'] .context-label { color: #ffedd5; }
+    .ai-chat-drawer[data-attachment-state='locked'] .tag-pill { background: #9a3412; border-color: #f59e0b; color: #fff7ed; }
+    .ai-chat-drawer[data-attachment-state='locked'] .context-controls [aria-pressed='true'] { background: #9a3412; border-color: #f59e0b; color: #ffedd5; }
     .context-copy { min-width: 0; }
     .context-eyebrow { color: #7f8998; display: block; font-size: 9px; font-weight: 700; letter-spacing: .08em; margin-bottom: 3px; text-transform: uppercase; }
     .context-label { color: #d9dce3; font: 11px/1.4 ui-monospace, SFMono-Regular, monospace; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1003,6 +1204,14 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .chat-composer { background: #10141a; border-top: 1px solid #292f3a; padding: 12px 14px 14px; }
     .composer-frame { background: #090c11; border: 1px solid #343c49; border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
     .composer-frame:focus-within { border-color: #7567d6; box-shadow: 0 0 0 2px rgb(139 92 246 / .15); }
+    .composer-frame[data-dragging-file='true'] { border-color: #a78bfa; box-shadow: 0 0 0 3px rgb(139 92 246 / .2); }
+    .file-tray { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 9px 0; }
+    .file-tray[hidden] { display: none; }
+    .file-chip { align-items: center; background: #1b2130; border: 1px solid #384155; border-radius: 7px; color: #dbe4f0; display: flex; gap: 6px; max-width: 100%; padding: 4px 5px 4px 7px; }
+    .file-icon { color: #a78bfa; font-size: 11px; }
+    .file-preview { border-radius: 4px; height: 28px; object-fit: cover; width: 36px; }
+    .file-name { font: 10px/1.3 ui-monospace, SFMono-Regular, monospace; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-remove { border: 0; height: 20px; padding: 0; width: 20px; }
     textarea { background: transparent; border: 0; box-sizing: border-box; color: white; font: inherit; max-height: 28vh; min-height: 70px; outline: none; padding: 10px 11px 6px; resize: none; width: 100%; }
     textarea::placeholder { color: #687281; }
     textarea:disabled { cursor: not-allowed; opacity: .55; }
@@ -1019,6 +1228,7 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .secondary-button { background: transparent; }
     .mode-button { color: #c4b5fd; white-space: nowrap; }
     .mode-button[aria-pressed='true'] { background: #312e81; border-color: #7c3aed; color: #ede9fe; }
+    .attach-button { font-size: 13px; }
     @keyframes agent-spin { to { transform: rotate(360deg); } }
     @keyframes agent-pulse { 50% { opacity: .35; transform: scale(.75); } }
     @media (prefers-reduced-motion: reduce) { .run-icon, .step-dot { animation: none !important; } }
@@ -1034,6 +1244,19 @@ export function createChatDrawerStyle(): HTMLStyleElement {
 
 function cloneAttachments(attachments: SelectionAttachment[]): SelectionAttachment[] {
   return JSON.parse(JSON.stringify(attachments)) as SelectionAttachment[];
+}
+
+function formatFileSize(bytes: number): string {
+  return bytes < 1_000 ? `${bytes} B` : `${Math.round(bytes / 1_000)} KB`;
+}
+
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 32_768;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return window.btoa(binary);
 }
 
 export type AgentMarkdownBlock =
@@ -1120,7 +1343,7 @@ function providerLabel(provider?: string): string {
 function stageTitle(state: AgentOperationState): string {
   const titles: Partial<Record<AgentOperationState, string>> = {
     planning: 'Understanding your request',
-    reading: 'Preparing the workspace',
+    reading: 'Preparing source context',
     editing: 'Working on your request',
     validation: 'Reviewing the result',
     diagnostics: 'Applying the transaction',

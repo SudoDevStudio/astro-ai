@@ -48,6 +48,40 @@ test('opens, minimizes, expands, and destroys the chat lifecycle', () => {
   } finally { cleanup(); }
 });
 
+test('discovers and invokes a deterministic insertion zone from the overlay', () => {
+  const cleanup = installDom('<main></main>');
+  try {
+    const commands = [];
+    window.prompt = (label) => label.includes('tag') ? 'section' : 'Hello';
+    const overlay = new SelectionOverlay({
+      onInspect() {},
+      onActiveChange() {},
+      onCommand(command) { commands.push(command); },
+      onAskAI() {},
+      onClear() {},
+      onSelectionChange() {},
+      onSelectionAnchorChange() {},
+    });
+    overlay.setInsertionZones([{
+      id: 'src/pages/index.astro:root',
+      file: 'src/pages/index.astro',
+      offset: 10,
+      acceptedChildTypes: ['*'],
+    }]);
+    overlay.start();
+    const control = document.querySelector('[data-astro-ai-ui="insertion-zone"]');
+    assert.equal(control?.textContent, '+ Add to page');
+    control.click();
+    assert.deepEqual(commands, [{
+      kind: 'insert-literal-element',
+      file: 'src/pages/index.astro',
+      tag: 'section',
+      text: 'Hello',
+    }]);
+    overlay.destroy();
+  } finally { cleanup(); }
+});
+
 test('parses code blocks and lists without producing executable HTML', () => {
   assert.deepEqual(parseAgentMarkdown('Result\n\n- one\n- two\n\n```ts\nconst x = "<script>";\n```'), [
     { kind: 'paragraph', text: 'Result' },

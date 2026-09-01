@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "description": "Development-only Build with AI tooling for Astro projects.",
   "license": "MIT",
-  "author": "SudoDevStudio",
+  "author": "Maninderpreet Singh",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SudoDevStudio/astro-ai.git"
@@ -37,7 +37,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
-    "test": "npm run test:unit && npm run test:hmr && npm run test:production",
+    "format:check": "prettier --check src/agent/cli-agent-fallback.ts",
+    "test": "npm run test:unit",
+    "test:all": "npm run test:unit && npm run test:hmr && npm run test:production",
     "test:unit": "npm run build && node --test test/*.test.mjs",
     "test:hmr": "node test/run-live-tests.mjs",
     "test:production": "node test/verify-production.mjs",
@@ -62,6 +64,7 @@
     "@types/node": "^22.19.0",
     "astro": "^7.2.9",
     "jsdom": "^29.1.1",
+    "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "vite": "^8.2.2"
   },

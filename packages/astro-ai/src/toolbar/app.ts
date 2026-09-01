@@ -7,6 +7,7 @@ import {
   type AgentOperationEvent,
   type ClientReadyMessage,
   type HistoryChangedMessage,
+  type InsertionZonesResolvedMessage,
   type OperationCompletedMessage,
   type SelectionResolvedMessage,
   type ServerReadyMessage,
@@ -24,6 +25,7 @@ export default defineToolbarApp({
     let disposed = false;
     let restoringOpenState = readSession(APP_OPEN_KEY) === 'true';
     const pendingInspectRequests = new Map<string, string>();
+    let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
     const drawer = new ChatDrawer({
       onSubmit({ requestId, instruction, mode, attachments, externalContext }) {
@@ -106,6 +108,7 @@ export default defineToolbarApp({
         overlay.start();
         drawer.open(!restoringOpenState, true, !restoringOpenState);
         drawer.setNotice('Click to select · Shift-click to add · drag to marquee');
+        requestInsertionZones();
       } else {
         overlay.disable();
         drawer.hide();
@@ -117,6 +120,7 @@ export default defineToolbarApp({
       if (disposed || protocolVersion !== PROTOCOL_VERSION) return;
       drawer.setProvider(agent);
       drawer.setHistory(history);
+      requestInsertionZones();
       if (agent.provider !== 'none' && !agent.authenticated) {
         drawer.setNotice(agent.message, true);
       }
@@ -126,10 +130,16 @@ export default defineToolbarApp({
       overlay.setSelection(context);
       drawer.setNotice('Source-backed selection resolved locally.');
     });
+    server.on<InsertionZonesResolvedMessage>(SERVER_EVENTS.insertionZones, ({ requestId, zones }) => {
+      if (disposed || requestId !== insertionZonesRequestId) return;
+      insertionZonesRequestId = undefined;
+      overlay.setInsertionZones(zones);
+    });
     server.on<OperationCompletedMessage>(SERVER_EVENTS.operation, ({ transaction, history }) => {
       if (disposed) return;
       drawer.setHistory(history);
       drawer.setNotice(`${humanize(transaction.kind)} applied; Vite HMR is updating the page.`);
+      requestInsertionZones();
       if (transaction.kind === 'reorder-sibling') overlay.clearSelection();
     });
     server.on<HistoryChangedMessage>(SERVER_EVENTS.history, (history) => {
@@ -165,6 +175,7 @@ export default defineToolbarApp({
     server.send<ClientReadyMessage>(CLIENT_EVENTS.ready, {
       protocolVersion: PROTOCOL_VERSION,
       route: window.location.pathname,
+      pendingAgentRequestIds: drawer.pendingRequestIds(),
     });
 
     if (readSession(APP_OPEN_KEY) === 'true') {
@@ -185,6 +196,14 @@ export default defineToolbarApp({
       server.send(CLIENT_EVENTS.execute, {
         requestId: createRequestId(),
         command,
+      });
+    }
+
+    function requestInsertionZones(): void {
+      insertionZonesRequestId = createRequestId();
+      server.send(CLIENT_EVENTS.insertionZones, {
+        requestId: insertionZonesRequestId,
+        route: window.location.pathname,
       });
     }
   },

@@ -1,4 +1,5 @@
 import type { SelectionContext } from './selection-context.js';
+import type { SourceInsertionZone } from './selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import type {
   PatchHistoryState,
@@ -15,6 +16,7 @@ export const CLIENT_EVENTS = {
   redo: 'astro-ai:redo',
   agentInstruction: 'astro-ai:agent-instruction',
   agentCancel: 'astro-ai:agent-cancel',
+  insertionZones: 'astro-ai:insertion-zones',
 } as const;
 
 export const SERVER_EVENTS = {
@@ -24,11 +26,13 @@ export const SERVER_EVENTS = {
   history: 'astro-ai:history',
   error: 'astro-ai:error',
   agentEvent: 'astro-ai:agent-event',
+  insertionZones: 'astro-ai:insertion-zones-result',
 } as const;
 
 export type ClientReadyMessage = {
   protocolVersion: typeof PROTOCOL_VERSION;
   route: string;
+  pendingAgentRequestIds?: string[];
 };
 
 export type ServerReadyMessage = {
@@ -84,6 +88,9 @@ export type AgentCancelMessage = {
   requestId: string;
 };
 
+export type InsertionZonesRequestMessage = { requestId: string; route: string };
+export type InsertionZonesResolvedMessage = { requestId: string; zones: SourceInsertionZone[] };
+
 export type AgentOperationState =
   | 'planning'
   | 'reading'
@@ -131,6 +138,7 @@ export type ClientToServerMessages = {
   [CLIENT_EVENTS.redo]: HistoryCommandMessage;
   [CLIENT_EVENTS.agentInstruction]: AgentInstructionMessage;
   [CLIENT_EVENTS.agentCancel]: AgentCancelMessage;
+  [CLIENT_EVENTS.insertionZones]: InsertionZonesRequestMessage;
 };
 
 export type ServerToClientMessages = {
@@ -140,4 +148,5 @@ export type ServerToClientMessages = {
   [SERVER_EVENTS.history]: HistoryChangedMessage;
   [SERVER_EVENTS.error]: VisualEditorErrorMessage;
   [SERVER_EVENTS.agentEvent]: AgentOperationEvent;
+  [SERVER_EVENTS.insertionZones]: InsertionZonesResolvedMessage;
 };

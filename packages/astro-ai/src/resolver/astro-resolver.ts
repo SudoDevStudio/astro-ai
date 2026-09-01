@@ -384,6 +384,20 @@ export class AstroResolver {
     return zones;
   }
 
+  findInsertionPointsForRoute(route: string): SourceInsertionZone[] {
+    const pathname = route.split(/[?#]/, 1)[0] ?? '/';
+    const segments = pathname.split('/').filter(Boolean);
+    const stem = segments.length === 0 ? 'index' : segments.join('/');
+    const candidates = new Set([
+      `src/pages/${stem}.astro`,
+      `src/pages/${stem}/index.astro`,
+    ]);
+    for (const file of this.#sourceLengths.keys()) {
+      if (candidates.has(this.toProjectPath(file))) return this.findInsertionPoints(file);
+    }
+    return [];
+  }
+
   acceptsSlot(parentComponent: string, slot: string, childType: string): boolean {
     return this.#capabilities.acceptsSlot(parentComponent, slot, childType);
   }

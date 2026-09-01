@@ -249,6 +249,12 @@ export class ChatDrawer {
     this.#syncComposer();
   }
 
+  pendingRequestIds(): string[] {
+    return [...this.#runStates.values()]
+      .filter(({ status }) => status === 'running')
+      .map(({ requestId }) => requestId);
+  }
+
   setCurrentSelections(contexts: SelectionContext[]): void {
     this.#currentSelections = [...contexts];
     this.#externalContext = undefined;

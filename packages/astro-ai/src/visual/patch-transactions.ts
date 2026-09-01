@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type { AstroResolver } from '../resolver/astro-resolver.js';
@@ -11,6 +11,8 @@ export type PatchTransactionHooks = {
   beforeApply?(absoluteFiles: string[]): void | Promise<void>;
   afterApply?(absoluteFiles: string[]): void | Promise<void>;
   historyFile?: string | false;
+  onHistoryWarning?(message: string): void;
+  maxRecoveryFiles?: number;
 };
 type StoredFileChange = ProposedFileChange;
 export type PatchTransaction = { id: string; kind: PatchTransactionKind; changes: StoredFileChange[]; createdAt: string };
@@ -25,6 +27,7 @@ export type PatchTransactionSummary = {
 };
 export type PatchHistoryState = { canUndo: boolean; canRedo: boolean; undoLabel?: PatchTransactionKind; redoLabel?: PatchTransactionKind };
 type PersistedHistory = { version: 1; undo: PatchTransaction[]; redo: PatchTransaction[] };
+const DEFAULT_MAX_RECOVERY_FILES = 20;
 
 export class PatchTransactionStore {
   readonly #resolver: AstroResolver;
@@ -172,11 +175,16 @@ export class PatchTransactionStore {
     if (this.#historyFile === false) return;
     try {
       const parsed = JSON.parse(await readFile(this.#historyFile, 'utf8')) as PersistedHistory;
-      if (parsed.version !== 1 || !Array.isArray(parsed.undo) || !Array.isArray(parsed.redo)) return;
+      if (parsed.version !== 1 || !Array.isArray(parsed.undo) || !Array.isArray(parsed.redo)) {
+        this.#hooks.onHistoryWarning?.(`Ignored invalid visual transaction history at ${this.#historyFile}. Delete the file to reset undo history.`);
+        return;
+      }
       this.#undoStack.push(...parsed.undo.slice(-50));
       this.#redoStack.push(...parsed.redo.slice(-50));
     } catch (error) {
-      if (!isNotFound(error)) return;
+      if (isNotFound(error)) return;
+      const detail = error instanceof Error ? error.message : 'unknown read error';
+      this.#hooks.onHistoryWarning?.(`Could not load visual transaction history at ${this.#historyFile}: ${detail}. Delete the file to reset undo history.`);
     }
   }
 
@@ -193,8 +201,22 @@ export class PatchTransactionStore {
     const recovery = join(dirname(this.#historyFile), 'recovery', `${Date.now()}-${randomUUID()}.diff`);
     await mkdir(dirname(recovery), { recursive: true });
     await writeFile(recovery, renderDiff(changes), 'utf8');
+    await pruneRecoveryDirectory(dirname(recovery), this.#hooks.maxRecoveryFiles ?? DEFAULT_MAX_RECOVERY_FILES);
     for (const conflict of conflicts) conflict.recoveryFile = recovery;
   }
+}
+
+export async function pruneRecoveryDirectory(
+  directory: string,
+  maximumFiles = DEFAULT_MAX_RECOVERY_FILES,
+): Promise<void> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const stale = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.diff'))
+    .map(({ name }) => name)
+    .sort((left, right) => right.localeCompare(left))
+    .slice(Math.max(0, maximumFiles));
+  await Promise.all(stale.map((name) => rm(join(directory, name), { force: true })));
 }
 
 type Reconciled = { ok: true; after?: string } | { ok: false; reason: string };

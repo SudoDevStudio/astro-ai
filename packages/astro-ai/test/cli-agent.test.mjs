@@ -136,6 +136,20 @@ test('answer-only mode discards generated edits for any provider adapter', async
   });
 });
 
+test('does not expose host dependencies to the provider workspace', async () => {
+  const fallback = new CliAgentFallback({
+    provider: 'claude',
+    projectRoot: process.cwd(),
+    command: fileURLToPath(new URL('./fixtures/inspect-workspace-claude.mjs', import.meta.url)),
+  });
+  const result = await fallback.execute(
+    { instruction: 'Inspect dependencies.', reason: 'Isolation test', mode: 'answer' },
+    { commitBatch() { throw new Error('Answer-only work must not commit.'); } },
+  );
+  assert.equal(result.response, 'node_modules:absent');
+  await fallback.dispose();
+});
+
 test('cancels a running provider process without creating a transaction', async () => {
   const fallback = new CliAgentFallback({
     provider: 'claude',
@@ -149,5 +163,22 @@ test('cancels a running provider process without creating a transaction', async 
   );
   setTimeout(() => controller.abort(), 30);
   await assert.rejects(operation, { name: 'AbortError' });
+  await fallback.dispose();
+});
+
+test('terminates a provider process that exceeds its configured deadline', async () => {
+  const fallback = new CliAgentFallback({
+    provider: 'claude',
+    projectRoot: process.cwd(),
+    command: fileURLToPath(new URL('./fixtures/slow-claude.mjs', import.meta.url)),
+    agentTimeoutMs: 30,
+  });
+  await assert.rejects(
+    fallback.execute(
+      { instruction: 'Wait forever', reason: 'Timeout test' },
+      { commitBatch() { throw new Error('Timed-out work must not commit.'); } },
+    ),
+    /timed out after 30 ms/i,
+  );
   await fallback.dispose();
 });

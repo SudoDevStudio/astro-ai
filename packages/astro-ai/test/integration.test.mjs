@@ -113,15 +113,21 @@ test('completes a typed toolbar readiness handshake', async () => {
   const warnings = [];
   const debugMessages = [];
   const integration = buildWithAI();
+  let vitePlugin;
 
   integration.hooks['astro:config:setup']({
     config: { root: new URL('../', import.meta.url) },
     command: 'dev',
     addDevToolbarApp() {},
     updateConfig(config) {
+      [vitePlugin] = config.vite.plugins;
       return config;
     },
   });
+  vitePlugin.transform.handler(
+    '<main>Insertion route</main>',
+    fileURLToPath(new URL('../src/pages/index.astro', import.meta.url)),
+  );
 
   integration.hooks['astro:server:setup']({
     toolbar: {
@@ -164,6 +170,12 @@ test('completes a typed toolbar readiness handshake', async () => {
   ]);
   assert.deepEqual(warnings, []);
   assert.deepEqual(debugMessages, ['Toolbar connected for route /.']);
+
+  sent.length = 0;
+  await listeners.get(CLIENT_EVENTS.insertionZones)({ requestId: 'zones', route: '/' });
+  assert.equal(sent[0][0], SERVER_EVENTS.insertionZones);
+  assert.equal(sent[0][1].requestId, 'zones');
+  assert.equal(sent[0][1].zones[0].file, 'src/pages/index.astro');
 });
 
 test('routes explicit AI requests through the fallback without a source transaction', async () => {
@@ -211,6 +223,16 @@ test('routes explicit AI requests through the fallback without a source transact
   });
   assert.equal(sent.length, 1);
   assert.equal(sent[0][0], SERVER_EVENTS.ready);
+
+  sent.length = 0;
+  await listeners.get(CLIENT_EVENTS.ready)({
+    protocolVersion: PROTOCOL_VERSION,
+    route: '/',
+    pendingAgentRequestIds: ['agent-request'],
+  });
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0][0], SERVER_EVENTS.ready);
+  assert.deepEqual(sent[1], failureEvent);
 
   sent.length = 0;
   await listeners.get(CLIENT_EVENTS.agentInstruction)({

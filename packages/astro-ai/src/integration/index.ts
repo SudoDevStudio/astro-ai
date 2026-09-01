@@ -24,6 +24,8 @@ import {
   type ExecuteVisualCommandMessage,
   type HistoryCommandMessage,
   type InspectSelectionMessage,
+  type InsertionZonesRequestMessage,
+  type InsertionZonesResolvedMessage,
   type ServerReadyMessage,
   type VisualEditorErrorMessage,
 } from '../shared/protocol.js';
@@ -40,9 +42,12 @@ export type BuildWithAIOptions = {
     provider: CliAgentProvider;
     command?: string;
     model?: string;
+    agentTimeoutMs?: number;
+    diagnosticsTimeoutMs?: number;
   } | false;
   excludeDirectories?: string[];
   skills?: string[];
+  maxRecoveryFiles?: number;
   /** Required to expose the credentialed agent bridge when Astro is bound beyond loopback. */
   allowNetworkAgent?: boolean;
   visualComponents?: VisualComponentDefinition[];
@@ -87,6 +92,10 @@ export default function buildWithAI(
         engine = new VisualCommandEngine(
           resolver,
           new PatchTransactionStore(resolver, {
+            onHistoryWarning(message) {
+              logger.warn(`[astro-ai] ${message}`);
+            },
+            ...(options.maxRecoveryFiles === undefined ? {} : { maxRecoveryFiles: options.maxRecoveryFiles }),
             async beforeApply(files) {
               if (viteServer === undefined) return;
               try {
@@ -123,6 +132,8 @@ export default function buildWithAI(
               ...(options.skills === undefined ? {} : { skills: options.skills }),
               ...('command' in cli && cli.command !== undefined ? { command: cli.command } : {}),
               ...('model' in cli && cli.model !== undefined ? { model: cli.model } : {}),
+              ...('agentTimeoutMs' in cli && cli.agentTimeoutMs !== undefined ? { agentTimeoutMs: cli.agentTimeoutMs } : {}),
+              ...('diagnosticsTimeoutMs' in cli && cli.diagnosticsTimeoutMs !== undefined ? { diagnosticsTimeoutMs: cli.diagnosticsTimeoutMs } : {}),
             });
           } catch (error) {
             const detail = error instanceof Error ? error.message : 'Invalid agent configuration.';
@@ -158,12 +169,20 @@ export default function buildWithAI(
         const activeResolver = resolver;
         const activeEngine = engine;
         const activeRequests = new Map<string, AbortController>();
+        const recentAgentEvents = new Map<string, AgentOperationEvent>();
         const networkExposed = isExternallyBound(server?.config?.server?.host);
         const activeAgent = networkExposed && options.allowNetworkAgent !== true
           ? new UnavailableAgentFallback('The AI agent bridge is disabled because Astro is listening beyond loopback. Set allowNetworkAgent: true only on a trusted network.')
           : agent;
 
         const sendAgentEvent = (event: AgentOperationEvent): void => {
+          recentAgentEvents.delete(event.requestId);
+          recentAgentEvents.set(event.requestId, event);
+          while (recentAgentEvents.size > 20) {
+            const oldest = recentAgentEvents.keys().next().value;
+            if (oldest === undefined) break;
+            recentAgentEvents.delete(oldest);
+          }
           toolbar.send<AgentOperationEvent>(SERVER_EVENTS.agentEvent, event);
         };
 
@@ -182,6 +201,10 @@ export default function buildWithAI(
             history: activeEngine.transactions.state(),
             agent: await activeAgent.status(),
           });
+          for (const requestId of message.pendingAgentRequestIds ?? []) {
+            const event = recentAgentEvents.get(requestId);
+            if (event !== undefined) toolbar.send<AgentOperationEvent>(SERVER_EVENTS.agentEvent, event);
+          }
         });
 
         toolbar.on<InspectSelectionMessage>(CLIENT_EVENTS.inspect, (message) => {
@@ -193,6 +216,13 @@ export default function buildWithAI(
           } catch (error) {
             sendError(toolbar, logger, error, message.requestId, false);
           }
+        });
+
+        toolbar.on<InsertionZonesRequestMessage>(CLIENT_EVENTS.insertionZones, (message) => {
+          toolbar.send<InsertionZonesResolvedMessage>(SERVER_EVENTS.insertionZones, {
+            requestId: message.requestId,
+            zones: activeResolver.findInsertionPointsForRoute(message.route),
+          });
         });
 
         toolbar.on<ExecuteVisualCommandMessage>(CLIENT_EVENTS.execute, async (message) => {

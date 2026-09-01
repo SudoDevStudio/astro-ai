@@ -1,4 +1,4 @@
-import type { SelectionContext } from '../shared/selection-context.js';
+import type { SelectionContext, SourceInsertionZone } from '../shared/selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import { middleTruncatePath } from './action-model.js';
 import { ContextualActionBar } from './contextual-actions.js';
@@ -37,6 +37,7 @@ export class SelectionOverlay {
   readonly #callbacks: SelectionOverlayCallbacks;
   readonly #selected = new Map<string, SelectedItem>();
   readonly #pending = new Map<string, PendingSelection>();
+  readonly #insertionControls = new Map<string, { zone: SourceInsertionZone; button: HTMLButtonElement }>();
   #active = false;
   #enabled = false;
   #primaryNodeId: string | undefined;
@@ -111,6 +112,7 @@ export class SelectionOverlay {
     document.addEventListener('pointerup', this.#onPointerUp, true);
     document.addEventListener('pointerleave', this.#onPointerLeave, true);
     document.addEventListener('click', this.#onClick, true);
+    this.#setInsertionControlsVisible(true);
   }
 
   stop(): void {
@@ -124,6 +126,36 @@ export class SelectionOverlay {
     document.removeEventListener('pointerup', this.#onPointerUp, true);
     document.removeEventListener('pointerleave', this.#onPointerLeave, true);
     document.removeEventListener('click', this.#onClick, true);
+    this.#setInsertionControlsVisible(false);
+  }
+
+  setInsertionZones(zones: SourceInsertionZone[]): void {
+    for (const { button } of this.#insertionControls.values()) button.remove();
+    this.#insertionControls.clear();
+    for (const zone of zones) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.astroAiUi = 'insertion-zone';
+      button.textContent = zone.slot === undefined ? '+ Add to page' : `+ Add to ${zone.slot}`;
+      button.title = `Insert a native Astro element into ${zone.file}`;
+      Object.assign(button.style, {
+        position: 'fixed',
+        zIndex: '2147483646',
+        border: '1px solid #8b5cf6',
+        borderRadius: '999px',
+        background: '#181b23',
+        color: '#ede9fe',
+        padding: '5px 9px',
+        font: '600 11px/1.2 ui-sans-serif, system-ui, sans-serif',
+        cursor: 'pointer',
+        boxShadow: '0 4px 14px rgb(0 0 0 / .3)',
+        display: this.#active ? 'block' : 'none',
+      });
+      button.addEventListener('click', () => this.#insertAtZone(zone));
+      document.documentElement.append(button);
+      this.#insertionControls.set(zone.id, { zone, button });
+    }
+    this.#positionInsertionControls();
   }
 
   setSelection(context: SelectionContext): void {
@@ -180,6 +212,8 @@ export class SelectionOverlay {
     this.#actions.destroy();
     this.#hover.remove();
     this.#marquee.remove();
+    for (const { button } of this.#insertionControls.values()) button.remove();
+    this.#insertionControls.clear();
   }
 
   readonly #onPointerDown = (event: PointerEvent): void => {
@@ -291,6 +325,7 @@ export class SelectionOverlay {
         }
       }
       this.#actions.reposition();
+      this.#positionInsertionControls();
       this.#emitAnchor(rects);
     });
   };
@@ -415,6 +450,50 @@ export class SelectionOverlay {
     this.#marqueeOrigin = undefined;
     this.#marqueeActive = false;
     this.#marquee.style.display = 'none';
+  }
+
+  #setInsertionControlsVisible(visible: boolean): void {
+    for (const { button } of this.#insertionControls.values()) {
+      button.style.display = visible ? 'block' : 'none';
+    }
+    if (visible) this.#positionInsertionControls();
+  }
+
+  #positionInsertionControls(): void {
+    let rootIndex = 0;
+    for (const { zone, button } of this.#insertionControls.values()) {
+      if (zone.parentNodeId === undefined) {
+        Object.assign(button.style, { left: '16px', top: `${16 + rootIndex * 34}px` });
+        rootIndex += 1;
+        continue;
+      }
+      const parent = findNodeById(zone.parentNodeId);
+      if (parent === undefined) {
+        button.style.display = 'none';
+        continue;
+      }
+      const rect = parent.getBoundingClientRect();
+      Object.assign(button.style, {
+        display: this.#active ? 'block' : 'none',
+        left: `${Math.max(8, rect.left + 8)}px`,
+        top: `${Math.max(8, Math.min(window.innerHeight - 32, rect.bottom - 28))}px`,
+      });
+    }
+  }
+
+  #insertAtZone(zone: SourceInsertionZone): void {
+    const tag = window.prompt('Native element tag', 'section')?.trim();
+    if (tag === undefined || tag === '') return;
+    const text = window.prompt('Literal text', '') ?? undefined;
+    if (text === undefined) return;
+    this.#callbacks.onCommand({
+      kind: 'insert-literal-element',
+      file: zone.file,
+      ...(zone.parentNodeId === undefined ? {} : { parentNodeId: zone.parentNodeId }),
+      ...(zone.slot === undefined ? {} : { slot: zone.slot }),
+      tag,
+      text,
+    });
   }
 }
 

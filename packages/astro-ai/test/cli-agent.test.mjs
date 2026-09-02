@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -280,6 +280,58 @@ test('rejects every generated change when a locked selection touches another fil
   assert.equal(committed, false);
   assert.equal(await readFile(selected, 'utf8'), 'selected:before');
   assert.equal(await readFile(outside, 'utf8'), 'outside:before');
+  await fallback.dispose();
+});
+
+test('regenerates Astro env declarations before isolated project diagnostics', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'astro-ai-env-diagnostics-'));
+  await mkdir(join(directory, 'src'), { recursive: true });
+  await symlink(join(process.cwd(), 'node_modules'), join(directory, 'node_modules'), 'dir');
+  await writeFile(join(directory, 'package.json'), JSON.stringify({
+    name: 'astro-env-diagnostics',
+    type: 'module',
+    scripts: { typecheck: 'tsc --noEmit' },
+    dependencies: { astro: '*' },
+  }), 'utf8');
+  await writeFile(join(directory, 'astro.config.mjs'), `
+    import { defineConfig, envField } from 'astro/config';
+    export default defineConfig({
+      env: { schema: { ERP_BASE_URL: envField.string({ context: 'server', access: 'public', default: 'https://example.test' }) } },
+    });
+  `, 'utf8');
+  await writeFile(join(directory, 'tsconfig.json'), JSON.stringify({
+    extends: 'astro/tsconfigs/strict',
+    include: ['.astro/types.d.ts', '**/*'],
+  }), 'utf8');
+  await writeFile(join(directory, 'src/health.ts'), `
+    import { ERP_BASE_URL } from 'astro:env/server';
+    export const health = ERP_BASE_URL;
+  `, 'utf8');
+  await writeFile(join(directory, 'selected.txt'), 'selected:before', 'utf8');
+  await writeFile(join(directory, 'outside.txt'), 'outside:before', 'utf8');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fallback = new CliAgentFallback({
+    provider: 'claude',
+    projectRoot: directory,
+    command: fileURLToPath(new URL('./fixtures/locked-scope-claude.mjs', import.meta.url)),
+  });
+  let committed = false;
+
+  const result = await fallback.execute({
+    instruction: 'Update the text fixtures.',
+    reason: 'Astro env diagnostics regression',
+  }, {
+    commitBatch(_kind, changes) {
+      committed = true;
+      return {
+        id: 'env-diagnostics',
+        kind: 'agent',
+        files: changes.map(({ file }) => file),
+      };
+    },
+  });
+  assert.equal(committed, true);
+  assert.equal(result.transaction?.id, 'env-diagnostics');
   await fallback.dispose();
 });
 

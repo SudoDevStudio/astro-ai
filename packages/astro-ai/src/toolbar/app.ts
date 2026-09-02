@@ -58,6 +58,17 @@ export default defineToolbarApp({
       onClose() {
         app.toggleState({ state: false });
       },
+      onMinimizedChange(minimized) {
+        if (minimized) {
+          overlay.disable();
+          drawer.setNotice('Selection mode paused while chat is minimized.');
+        } else {
+          overlay.enable();
+          overlay.start();
+          drawer.setNotice('Click to select · Shift-click to add · drag to marquee');
+          requestInsertionZones();
+        }
+      },
     });
 
     overlay = new SelectionOverlay({

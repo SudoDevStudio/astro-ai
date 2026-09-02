@@ -33,16 +33,39 @@ test('keyboard-selects a source-backed element and tears the overlay down cleanl
 });
 
 test('opens, minimizes, expands, and destroys the chat lifecycle', () => {
-  const cleanup = installDom('<main></main>');
+  const cleanup = installDom('<main><button data-astro-ai-id="node-1">Select</button></main>');
   try {
-    const drawer = new ChatDrawer({ onSubmit() {}, onCancel() {}, onUndo() {}, onRedo() {}, onClose() {} });
+    const minimizedStates = [];
+    const overlay = new SelectionOverlay({
+      onInspect() {}, onActiveChange() {}, onCommand() {}, onAskAI() {}, onClear() {},
+      onSelectionChange() {}, onSelectionAnchorChange() {},
+    });
+    const drawer = new ChatDrawer({
+      onSubmit() {}, onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
+      onMinimizedChange(minimized) {
+        minimizedStates.push(minimized);
+        if (minimized) overlay.disable();
+        else overlay.start();
+      },
+    });
     drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
     drawer.open(false);
     assert.equal(drawer.element.hidden, false);
+    const target = document.querySelector('button');
+    target.focus();
+    target.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    overlay.setSelection(selectionContext());
+    assert.equal(overlay.active, true);
+    assert.notEqual(document.querySelector('[data-astro-ai-ui="selection"]'), null);
     drawer.toggleCollapsed();
     assert.equal(drawer.element.dataset.minimized, 'true');
+    assert.equal(overlay.active, false);
+    assert.equal(document.querySelector('[data-astro-ai-ui="selection"]'), null);
     drawer.toggleCollapsed();
     assert.equal(drawer.element.dataset.minimized, 'false');
+    assert.equal(overlay.active, true);
+    assert.deepEqual(minimizedStates, [false, true, false]);
+    overlay.destroy();
     drawer.destroy();
     assert.equal(drawer.element.isConnected, false);
   } finally { cleanup(); }

@@ -1088,7 +1088,11 @@ async function runProjectDiagnostics(
   signal?: AbortSignal,
   timeoutMs?: number,
 ): Promise<ProcessResult | undefined> {
-  let manifest: { scripts?: Record<string, string> };
+  let manifest: {
+    scripts?: Record<string, string>;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
   try {
     manifest = JSON.parse(
       await readFile(join(workspace, "package.json"), "utf8"),
@@ -1100,27 +1104,23 @@ async function runProjectDiagnostics(
     (name) => manifest.scripts?.[name] !== undefined,
   );
   if (script === undefined) return undefined;
-  const projectDependencies = join(projectRoot, "node_modules");
-  const workspaceDependencies = join(workspace, "node_modules");
-  try {
-    await stat(projectDependencies);
-  } catch (error) {
-    if (isNotFound(error))
-      return runProcess(
+  const usesAstro =
+    manifest.dependencies?.astro !== undefined ||
+    manifest.devDependencies?.astro !== undefined;
+  const runDiagnostics = async (): Promise<ProcessResult> => {
+    if (usesAstro) {
+      const sync = await runProcess(
         "npm",
-        ["run", script],
+        ["exec", "--offline", "--", "astro", "sync"],
         workspace,
         "",
         signal,
         undefined,
         timeoutMs,
       );
-    throw error;
-  }
-  await rm(workspaceDependencies, { recursive: true, force: true });
-  await symlink(projectDependencies, workspaceDependencies, "dir");
-  try {
-    return await runProcess(
+      if (sync.code !== 0) return sync;
+    }
+    return runProcess(
       "npm",
       ["run", script],
       workspace,
@@ -1129,6 +1129,19 @@ async function runProjectDiagnostics(
       undefined,
       timeoutMs,
     );
+  };
+  const projectDependencies = join(projectRoot, "node_modules");
+  const workspaceDependencies = join(workspace, "node_modules");
+  try {
+    await stat(projectDependencies);
+  } catch (error) {
+    if (isNotFound(error)) return runDiagnostics();
+    throw error;
+  }
+  await rm(workspaceDependencies, { recursive: true, force: true });
+  await symlink(projectDependencies, workspaceDependencies, "dir");
+  try {
+    return await runDiagnostics();
   } finally {
     await rm(workspaceDependencies, { recursive: true, force: true });
   }

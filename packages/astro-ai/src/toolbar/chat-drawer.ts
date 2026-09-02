@@ -29,6 +29,7 @@ export type ChatDrawerCallbacks = {
   onUndo(): void;
   onRedo(): void;
   onClose(): void;
+  onMinimizedChange?(minimized: boolean): void;
 };
 
 type RunView = {
@@ -279,7 +280,7 @@ export class ChatDrawer {
     this.#renderFiles();
     this.#restoreRuns();
     this.#syncComposer();
-    this.#setMinimized(this.#minimized, false);
+    this.#setMinimized(this.#minimized, false, false);
   }
 
   setProvider(provider: ServerReadyMessage['agent']): void {
@@ -471,7 +472,7 @@ export class ChatDrawer {
     this.#setMinimized(!this.#minimized);
   }
 
-  #setMinimized(minimized: boolean, persist = true): void {
+  #setMinimized(minimized: boolean, persist = true, notify = true): void {
     const control = chatWindowCollapseControl(minimized);
     this.#minimized = minimized;
     this.element.dataset.minimized = String(minimized);
@@ -482,6 +483,7 @@ export class ChatDrawer {
     this.#collapse.setAttribute('aria-label', this.#collapse.title);
     this.#collapse.setAttribute('aria-expanded', String(control.expanded));
     if (persist) writeSession(DRAWER_MINIMIZED_KEY, String(minimized));
+    if (notify) this.#callbacks.onMinimizedChange?.(minimized);
     this.#scheduleConnector();
     requestAnimationFrame(() => this.#constrainPosition());
   }

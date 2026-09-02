@@ -20,6 +20,7 @@ import {
   type AgentProgressState,
   type AgentProviderStatus,
 } from "./agent-fallback.js";
+import { DEFAULT_SESSION_ID } from "../shared/protocol.js";
 import type { PatchTransactionStore } from "../visual/patch-transactions.js";
 
 export type CliAgentProvider = "codex" | "claude";
@@ -42,6 +43,20 @@ type ConversationTurn = {
   changedFiles: string[];
 };
 type CachedStatus = { expiresAt: number; value: AgentProviderStatus };
+/**
+ * One chat window's server state. Turns and the provider workspace are private
+ * to the window so two conversations never contaminate each other, while the
+ * source transaction store stays shared because both edit the same project.
+ */
+type AgentSession = {
+  id: string;
+  turns: ConversationTurn[];
+  workspace: WorkspaceMirror;
+  /** Serializes this window's own runs, which share one mirrored workspace. */
+  queue: RunQueue;
+  running: number;
+  lastUsedAt: number;
+};
 const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   ".astro",
   ".git",
@@ -61,6 +76,8 @@ const DEFAULT_MAX_WORKSPACE_BYTES = 64_000_000;
 const MAX_WORKSPACE_FILES = 20_000;
 const MAX_PROCESS_OUTPUT = 240_000;
 const MAX_CONVERSATION_TURNS = 4;
+/** Each live session mirrors the project into its own temp directory. */
+const MAX_AGENT_SESSIONS = 8;
 const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_DIAGNOSTICS_TIMEOUT_MS = 2 * 60_000;
 const STATUS_TIMEOUT_MS = 10_000;
@@ -72,10 +89,11 @@ export class CliAgentFallback extends AgentFallback {
   readonly #model: string | undefined;
   readonly #skills: string[];
   readonly #statusCacheMs: number;
-  readonly #workspace: WorkspaceMirror;
+  readonly #workspaceOptions: WorkspaceMirrorOptions;
   readonly #agentTimeoutMs: number;
   readonly #diagnosticsTimeoutMs: number;
-  readonly #turns: ConversationTurn[] = [];
+  readonly #sessions = new Map<string, AgentSession>();
+  readonly #editQueue = new RunQueue();
   #statusCache: CachedStatus | undefined;
 
   constructor(options: CliAgentFallbackOptions) {
@@ -96,13 +114,13 @@ export class CliAgentFallback extends AgentFallback {
       DEFAULT_DIAGNOSTICS_TIMEOUT_MS,
       "diagnosticsTimeoutMs",
     );
-    this.#workspace = new WorkspaceMirror({
+    this.#workspaceOptions = {
       projectRoot: this.#projectRoot,
       excludedDirectories: resolveExcludedDirectories(
         options.excludeDirectories,
       ),
       maxBytes: options.maxWorkspaceBytes ?? DEFAULT_MAX_WORKSPACE_BYTES,
-    });
+    };
   }
 
   async status(force = false): Promise<AgentProviderStatus> {
@@ -168,8 +186,50 @@ export class CliAgentFallback extends AgentFallback {
     const providerStatus = await this.status();
     if (!providerStatus.available || !providerStatus.authenticated)
       throw new Error(providerStatus.message);
+    const session = this.#session(request.sessionId ?? DEFAULT_SESSION_ID);
+    session.running += 1;
+    try {
+      // A window's runs share one mirrored workspace, so they always take turns.
+      // Runs that can write source additionally take a project-wide turn: a
+      // second window must not mirror the project, edit it, and commit over a
+      // transaction that landed meanwhile. Answer-only runs never commit, so
+      // they skip the project-wide queue and stay concurrent across windows.
+      return await session.queue.run(
+        () =>
+          request.onProgress?.(
+            "queued",
+            "Waiting for this chat window’s previous run to finish…",
+          ),
+        async () => {
+          throwIfAborted(request.signal);
+          if (request.mode === "answer")
+            return this.#runSession(session, request, transactions);
+          return this.#editQueue.run(
+            () =>
+              request.onProgress?.(
+                "queued",
+                "Waiting for another chat window’s source edit to finish…",
+              ),
+            async () => {
+              throwIfAborted(request.signal);
+              return this.#runSession(session, request, transactions);
+            },
+          );
+        },
+      );
+    } finally {
+      session.running -= 1;
+      session.lastUsedAt = Date.now();
+    }
+  }
+
+  async #runSession(
+    session: AgentSession,
+    request: AgentFallbackRequest,
+    transactions: PatchTransactionStore,
+  ): Promise<AgentFallbackResult> {
     request.onProgress?.("reading", "Preparing a safe source transaction…");
-    const { root: workspace, before } = await this.#workspace.prepare();
+    const { root: workspace, before } = await session.workspace.prepare();
     const skills = await loadSkillFiles(this.#projectRoot, this.#skills);
     let streamedResponse: string | undefined;
     try {
@@ -182,7 +242,7 @@ export class CliAgentFallback extends AgentFallback {
         this.#command,
         providerArguments(this.#provider, workspace, this.#model, imagePaths),
         workspace,
-        buildPrompt(request, this.#turns, skills),
+        buildPrompt(request, session.turns, skills),
         request.signal,
         (stream, line) => {
           if (stream !== "stdout") return;
@@ -222,15 +282,15 @@ export class CliAgentFallback extends AgentFallback {
         `${displayName(this.#provider)} completed the request.`;
       const response = sanitizeWorkspacePaths(rawResponse, workspace);
       request.onProgress?.("validation", "Reviewing proposed source changes…");
-      const after = await this.#workspace.snapshotWorkspace();
+      const after = await session.workspace.snapshotWorkspace();
       const changed = diffSnapshots(before, after);
       if (request.mode === "answer") {
-        await this.#workspace.restore(before);
-        this.#remember(request.instruction, response, []);
+        await session.workspace.restore(before);
+        this.#remember(session, request.instruction, response, []);
         return { provider: this.#provider, response };
       }
       if (changed.length === 0) {
-        this.#remember(request.instruction, response, []);
+        this.#remember(session, request.instruction, response, []);
         return { provider: this.#provider, response };
       }
       if (request.editableFiles !== undefined) {
@@ -241,7 +301,7 @@ export class CliAgentFallback extends AgentFallback {
         );
         const outsideScope = changed.filter(({ file }) => !allowed.has(file));
         if (outsideScope.length > 0) {
-          await this.#workspace.restore(before);
+          await session.workspace.restore(before);
           throw new Error(
             `Locked edit scope rejected changes outside the selected file${allowed.size === 1 ? "" : "s"}: ${outsideScope.map(({ file }) => file).join(", ")}. No files were applied.`,
           );
@@ -271,11 +331,11 @@ export class CliAgentFallback extends AgentFallback {
         `Applying ${proposed.length} generated file change${proposed.length === 1 ? "" : "s"} as one recoverable transaction…`,
       );
       const transaction = await transactions.commitBatch("agent", proposed);
-      this.#remember(request.instruction, response, transaction.files);
+      this.#remember(session, request.instruction, response, transaction.files);
       return { provider: this.#provider, response, transaction };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError")
-        await this.#workspace.restore(before);
+        await session.workspace.restore(before);
       throw error;
     } finally {
       await clearAgentAttachments(workspace);
@@ -283,16 +343,104 @@ export class CliAgentFallback extends AgentFallback {
   }
 
   async dispose(): Promise<void> {
-    await this.#workspace.dispose();
+    const sessions = [...this.#sessions.values()];
+    this.#sessions.clear();
+    await Promise.all(sessions.map((session) => session.workspace.dispose()));
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    const session = this.#sessions.get(sessionId);
+    // A window closed mid-run still owns its workspace; the run's own cleanup
+    // path releases it once the provider process settles.
+    if (session === undefined || session.running > 0) return;
+    this.#sessions.delete(sessionId);
+    await session.workspace.dispose();
+  }
+
+  async retainSessions(sessionIds: readonly string[]): Promise<void> {
+    const retained = new Set(sessionIds);
+    await Promise.all(
+      [...this.#sessions.keys()]
+        .filter((id) => !retained.has(id))
+        .map((id) => this.closeSession(id)),
+    );
+  }
+
+  /** Live session count, for tests and diagnostics. */
+  get sessionCount(): number {
+    return this.#sessions.size;
+  }
+
+  #session(sessionId: string): AgentSession {
+    const existing = this.#sessions.get(sessionId);
+    if (existing !== undefined) {
+      existing.lastUsedAt = Date.now();
+      return existing;
+    }
+    this.#evictIdleSessions();
+    const session: AgentSession = {
+      id: sessionId,
+      turns: [],
+      workspace: new WorkspaceMirror(this.#workspaceOptions),
+      queue: new RunQueue(),
+      running: 0,
+      lastUsedAt: Date.now(),
+    };
+    this.#sessions.set(sessionId, session);
+    return session;
+  }
+
+  /** Keeps mirrored workspaces bounded when many windows are opened and abandoned. */
+  #evictIdleSessions(): void {
+    const idle = [...this.#sessions.values()]
+      .filter((session) => session.running === 0)
+      .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
+    while (this.#sessions.size >= MAX_AGENT_SESSIONS) {
+      const oldest = idle.shift();
+      if (oldest === undefined) break;
+      this.#sessions.delete(oldest.id);
+      void oldest.workspace.dispose();
+    }
   }
 
   #remember(
+    session: AgentSession,
     instruction: string,
     response: string,
     changedFiles: string[],
   ): void {
-    this.#turns.push({ instruction, response, changedFiles });
-    if (this.#turns.length > MAX_CONVERSATION_TURNS) this.#turns.shift();
+    session.turns.push({ instruction, response, changedFiles });
+    if (session.turns.length > MAX_CONVERSATION_TURNS) session.turns.shift();
+  }
+}
+
+/**
+ * Serializes tasks in submission order. Callers are told when they actually
+ * had to wait so a queued chat window can say so instead of looking stalled.
+ */
+export class RunQueue {
+  #tail: Promise<unknown> = Promise.resolve();
+  #depth = 0;
+
+  get depth(): number {
+    return this.#depth;
+  }
+
+  async run<T>(onQueued: () => void, task: () => Promise<T>): Promise<T> {
+    if (this.#depth > 0) onQueued();
+    this.#depth += 1;
+    const predecessor = this.#tail;
+    let release = (): void => {};
+    this.#tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await predecessor.catch(() => {});
+      return await task();
+    } finally {
+      this.#depth -= 1;
+      release();
+    }
   }
 }
 
@@ -587,17 +735,16 @@ export function createSafeChildEnvironment(
 
 type WorkspaceFile = { content: string; fingerprint: string };
 type WorkspaceFiles = Map<string, WorkspaceFile>;
+type WorkspaceMirrorOptions = {
+  projectRoot: string;
+  excludedDirectories: ReadonlySet<string>;
+  maxBytes: number;
+};
 class WorkspaceMirror {
   #root: string | undefined;
   #projectFiles: WorkspaceFiles = new Map();
   #workspaceFiles: WorkspaceFiles = new Map();
-  constructor(
-    readonly options: {
-      projectRoot: string;
-      excludedDirectories: ReadonlySet<string>;
-      maxBytes: number;
-    },
-  ) {}
+  constructor(readonly options: WorkspaceMirrorOptions) {}
   async prepare(): Promise<{ root: string; before: Map<string, string> }> {
     if (this.#root === undefined) {
       this.#root = await mkdtemp(join(tmpdir(), "astro-ai-agent-"));

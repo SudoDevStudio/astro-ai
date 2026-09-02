@@ -15,6 +15,7 @@ import { AstroResolver } from '../resolver/astro-resolver.js';
 import type { VisualComponentDefinition } from '../shared/visual-components.js';
 import {
   CLIENT_EVENTS,
+  DEFAULT_SESSION_ID,
   PROTOCOL_VERSION,
   SERVER_EVENTS,
   type ClientReadyMessage,
@@ -22,6 +23,7 @@ import {
   type AgentInstructionMessage,
   type AgentFileAttachment,
   type AgentOperationEvent,
+  type AgentSessionClosedMessage,
   type ExecuteVisualCommandMessage,
   type HistoryCommandMessage,
   type InspectSelectionMessage,
@@ -273,6 +275,10 @@ export default function buildWithAI(
             const event = recentAgentEvents.get(requestId);
             if (event !== undefined) toolbar.send<AgentOperationEvent>(SERVER_EVENTS.agentEvent, event);
           }
+          // A reload can drop chat windows; release the workspaces they held.
+          if (message.activeSessionIds !== undefined) {
+            await activeAgent.retainSessions(message.activeSessionIds);
+          }
         });
 
         toolbar.on<InspectSelectionMessage>(CLIENT_EVENTS.inspect, (message) => {
@@ -334,6 +340,7 @@ export default function buildWithAI(
 
         toolbar.on<AgentInstructionMessage>(CLIENT_EVENTS.agentInstruction, async (message) => {
           const controller = new AbortController();
+          const sessionId = message.sessionId ?? DEFAULT_SESSION_ID;
           activeRequests.set(message.requestId, controller);
           try {
             const references = agentSelectionReferences(message);
@@ -349,6 +356,7 @@ export default function buildWithAI(
               : undefined;
             sendAgentEvent({
               requestId: message.requestId,
+              sessionId,
               state: 'planning',
               message: message.externalContext !== undefined
                 ? `Planning a fix for the attached ${message.externalContext.kind}…`
@@ -364,6 +372,7 @@ export default function buildWithAI(
               {
                 instruction: message.instruction,
                 reason: 'The user explicitly chose Ask AI.',
+                sessionId,
                 mode: message.mode ?? 'auto',
                 ...(selections.length === 0 ? {} : { selections }),
                 ...(editableFiles === undefined ? {} : { editableFiles }),
@@ -375,6 +384,7 @@ export default function buildWithAI(
                 onProgress(state, progressMessage) {
                   sendAgentEvent({
                     requestId: message.requestId,
+                    sessionId,
                     state,
                     message: progressMessage,
                   });
@@ -384,6 +394,7 @@ export default function buildWithAI(
             );
             sendAgentEvent({
               requestId: message.requestId,
+              sessionId,
               state: 'completion',
               message: result.transaction === undefined
                 ? 'Agent response completed without changing source files.'
@@ -399,6 +410,7 @@ export default function buildWithAI(
             if (error instanceof Error && error.name === 'AbortError') {
               sendAgentEvent({
                 requestId: message.requestId,
+                sessionId,
                 state: 'cancellation',
                 message: 'Agent operation cancelled. No source transaction was created.',
               });
@@ -408,6 +420,7 @@ export default function buildWithAI(
             logger.warn(detail);
             sendAgentEvent({
               requestId: message.requestId,
+              sessionId,
               state: 'failure',
               message: detail,
             });
@@ -419,6 +432,17 @@ export default function buildWithAI(
         toolbar.on<AgentCancelMessage>(CLIENT_EVENTS.agentCancel, (message) => {
           const request = activeRequests.get(message.requestId);
           if (request !== undefined) request.abort();
+        });
+
+        toolbar.on<AgentSessionClosedMessage>(CLIENT_EVENTS.sessionClose, async (message) => {
+          if (typeof message?.sessionId !== 'string') return;
+          try {
+            await activeAgent.closeSession(message.sessionId);
+          } catch (error) {
+            logger.warn(
+              `Failed to release chat session ${message.sessionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
+          }
         });
         server?.httpServer?.once('close', () => { void activeAgent.dispose(); });
       },

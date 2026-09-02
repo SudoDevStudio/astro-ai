@@ -6,7 +6,7 @@ import type {
   PatchTransactionSummary,
 } from '../visual/patch-transactions.js';
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 
 export const CLIENT_EVENTS = {
   ready: 'astro-ai:client-ready',
@@ -16,8 +16,16 @@ export const CLIENT_EVENTS = {
   redo: 'astro-ai:redo',
   agentInstruction: 'astro-ai:agent-instruction',
   agentCancel: 'astro-ai:agent-cancel',
+  sessionClose: 'astro-ai:session-close',
   insertionZones: 'astro-ai:insertion-zones',
 } as const;
+
+/**
+ * Identifies one chat window's conversation. Every window keeps its own turn
+ * history and provider workspace; source history stays shared across windows
+ * because all windows edit the same project files.
+ */
+export const DEFAULT_SESSION_ID = 'default';
 
 export const SERVER_EVENTS = {
   ready: 'astro-ai:server-ready',
@@ -33,6 +41,8 @@ export type ClientReadyMessage = {
   protocolVersion: typeof PROTOCOL_VERSION;
   route: string;
   pendingAgentRequestIds?: string[];
+  /** Chat windows the page still has open; idle server sessions outside this list are released. */
+  activeSessionIds?: string[];
 };
 
 export type ServerReadyMessage = {
@@ -87,6 +97,7 @@ export type AgentFileAttachment = {
 
 export type AgentInstructionMessage = {
   requestId: string;
+  sessionId?: string;
   instruction: string;
   mode?: AgentRequestMode;
   attachments?: AgentSelectionReference[];
@@ -99,11 +110,16 @@ export type AgentCancelMessage = {
   requestId: string;
 };
 
+export type AgentSessionClosedMessage = {
+  sessionId: string;
+};
+
 export type InsertionZonesRequestMessage = { requestId: string; route: string };
 export type InsertionZonesResolvedMessage = { requestId: string; zones: SourceInsertionZone[] };
 
 export type AgentOperationState =
   | 'planning'
+  | 'queued'
   | 'reading'
   | 'editing'
   | 'validation'
@@ -115,6 +131,7 @@ export type AgentOperationState =
 
 export type AgentOperationEvent = {
   requestId: string;
+  sessionId?: string;
   state: AgentOperationState;
   message: string;
   response?: string;
@@ -149,6 +166,7 @@ export type ClientToServerMessages = {
   [CLIENT_EVENTS.redo]: HistoryCommandMessage;
   [CLIENT_EVENTS.agentInstruction]: AgentInstructionMessage;
   [CLIENT_EVENTS.agentCancel]: AgentCancelMessage;
+  [CLIENT_EVENTS.sessionClose]: AgentSessionClosedMessage;
   [CLIENT_EVENTS.insertionZones]: InsertionZonesRequestMessage;
 };
 

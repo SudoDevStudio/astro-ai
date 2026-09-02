@@ -15,6 +15,7 @@ import {
 
 export type AgentSubmit = {
   requestId: string;
+  sessionId: string;
   instruction: string;
   mode: AgentRequestMode;
   attachments?: SelectionAttachment[];
@@ -28,8 +29,19 @@ export type ChatDrawerCallbacks = {
   onCancel(requestId: string): void;
   onUndo(): void;
   onRedo(): void;
+  /** Closes this chat window only. */
   onClose(): void;
+  onNewWindow?(): void;
+  onRename?(title: string): void;
+  onFocus?(): void;
   onMinimizedChange?(minimized: boolean): void;
+};
+
+export type ChatDrawerOptions = {
+  sessionId: string;
+  title: string;
+  /** Cascade offset applied when this window has no saved position. */
+  index?: number;
 };
 
 type RunView = {
@@ -76,6 +88,17 @@ const DRAWER_CONTEXT_KEY = 'astro-ai:drawer-context';
 const DRAWER_RUNS_KEY = 'astro-ai:drawer-runs';
 const DRAWER_POSITION_KEY = 'astro-ai:drawer-position';
 const DRAWER_MODE_KEY = 'astro-ai:drawer-answer-only';
+const DRAWER_SESSION_KEYS = [
+  DRAWER_OPEN_KEY,
+  DRAWER_MINIMIZED_KEY,
+  DRAWER_CONTEXT_KEY,
+  DRAWER_RUNS_KEY,
+  DRAWER_POSITION_KEY,
+  DRAWER_MODE_KEY,
+] as const;
+/** Cascade step between chat windows that have never been dragged. */
+const WINDOW_CASCADE_STEP = 34;
+const MAX_TITLE_LENGTH = 40;
 const MAX_FILE_ATTACHMENTS = 5;
 const MAX_FILE_BYTES = 256_000;
 const MAX_TOTAL_FILE_BYTES = 512_000;
@@ -85,7 +108,10 @@ const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 
 
 export class ChatDrawer {
   readonly element: HTMLElement;
+  readonly sessionId: string;
   readonly #callbacks: ChatDrawerCallbacks;
+  readonly #index: number;
+  readonly #titleInput: HTMLInputElement;
   readonly #body: HTMLDivElement;
   readonly #context: HTMLDivElement;
   readonly #messages: HTMLDivElement;
@@ -126,9 +152,11 @@ export class ChatDrawer {
   #dragOffset: ChatWindowPosition | undefined;
   #resizeBounds: { right: number; bottom: number } | undefined;
 
-  constructor(callbacks: ChatDrawerCallbacks) {
+  constructor(callbacks: ChatDrawerCallbacks, options: ChatDrawerOptions) {
     this.#callbacks = callbacks;
-    const persistedContext = readSessionJson<{
+    this.sessionId = options.sessionId;
+    this.#index = options.index ?? 0;
+    const persistedContext = this.#readJson<{
       attachments?: SelectionAttachment[];
       externalContext?: AgentExternalContext;
       locked?: boolean;
@@ -139,13 +167,15 @@ export class ChatDrawer {
     this.#attachments = [];
     this.#externalContext = persistedContext?.externalContext;
     this.#locked = false;
-    this.#minimized = readSession(DRAWER_MINIMIZED_KEY) === 'true';
-    this.#answerOnly = readSession(DRAWER_MODE_KEY) === 'true';
-    this.#position = readSessionJson<ChatWindowPosition>(DRAWER_POSITION_KEY);
+    this.#minimized = this.#read(DRAWER_MINIMIZED_KEY) === 'true';
+    this.#answerOnly = this.#read(DRAWER_MODE_KEY) === 'true';
+    this.#position = this.#readJson<ChatWindowPosition>(DRAWER_POSITION_KEY);
     this.element = document.createElement('aside');
     this.element.className = 'ai-chat-drawer';
-    this.element.setAttribute('aria-label', 'Build with AI chat');
+    this.element.setAttribute('aria-label', `Build with AI chat · ${options.title}`);
+    this.element.dataset.sessionId = options.sessionId;
     this.element.dataset.minimized = String(this.#minimized);
+    this.element.addEventListener('pointerdown', () => this.#callbacks.onFocus?.(), true);
 
     const resize = element('div', 'drawer-resize');
     resize.title = 'Resize agent panel';
@@ -160,19 +190,32 @@ export class ChatDrawer {
     const titles = document.createElement('div');
     const eyebrow = element('span', 'drawer-eyebrow');
     eyebrow.textContent = 'Build with AI';
-    const title = document.createElement('h2');
-    title.textContent = 'AI assistant';
-    titles.append(eyebrow, title);
+    this.#titleInput = document.createElement('input');
+    this.#titleInput.className = 'drawer-title';
+    this.#titleInput.value = options.title;
+    this.#titleInput.maxLength = MAX_TITLE_LENGTH;
+    this.#titleInput.spellcheck = false;
+    this.#titleInput.title = 'Rename this chat window';
+    this.#titleInput.setAttribute('aria-label', 'Chat window name');
+    this.#titleInput.addEventListener('change', this.#commitTitle);
+    this.#titleInput.addEventListener('blur', this.#commitTitle);
+    this.#titleInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') this.#titleInput.blur();
+    });
+    titles.append(eyebrow, this.#titleInput);
     identity.append(mark, titles);
     const headerActions = element('div', 'drawer-header-actions');
     this.#providerBadge = element('span', 'provider-badge');
     this.#providerBadge.dataset.state = 'checking';
     this.#providerBadge.textContent = 'Checking CLI…';
+    const newWindow = iconButton('＋', 'Open another chat window', () => this.#callbacks.onNewWindow?.());
+    newWindow.classList.add('new-window-button');
+    newWindow.hidden = callbacks.onNewWindow === undefined;
     this.#collapse = iconButton('−', 'Collapse chat window', () => this.toggleCollapsed());
     this.#collapse.classList.add('collapse-button');
-    const close = iconButton('×', 'Close Build with AI', () => this.#callbacks.onClose());
+    const close = iconButton('×', 'Close this chat window', () => this.#callbacks.onClose());
     close.classList.add('close-button');
-    headerActions.append(this.#providerBadge, this.#collapse, close);
+    headerActions.append(this.#providerBadge, newWindow, this.#collapse, close);
     header.append(identity, headerActions);
 
     this.#toolbar = element('div', 'drawer-toolbar');
@@ -233,7 +276,7 @@ export class ChatDrawer {
     this.#attach.classList.add('attach-button');
     this.#mode = button('Answer only', () => {
       this.#answerOnly = !this.#answerOnly;
-      writeSession(DRAWER_MODE_KEY, String(this.#answerOnly));
+      this.#write(DRAWER_MODE_KEY, String(this.#answerOnly));
       this.#syncComposer();
     });
     this.#mode.className = 'mode-button';
@@ -270,7 +313,7 @@ export class ChatDrawer {
     this.#body.append(this.#context, this.#messages, this.#composer);
     this.element.append(resize, header, this.#toolbar, this.#body);
     if (this.#position !== undefined) this.#applyPosition(this.#position);
-    [this.#connector, this.#connectorPath] = createSelectionConnector();
+    [this.#connector, this.#connectorPath] = createSelectionConnector(options.sessionId);
     document.documentElement.append(this.#connector);
     this.#drawerResizeObserver = new ResizeObserver(() => this.#scheduleConnector());
     this.#drawerResizeObserver.observe(this.element);
@@ -282,6 +325,53 @@ export class ChatDrawer {
     this.#syncComposer();
     this.#setMinimized(this.#minimized, false, false);
   }
+
+  get title(): string {
+    return this.#titleInput.value.trim() || 'Chat';
+  }
+
+  get minimized(): boolean {
+    return this.#minimized;
+  }
+
+  rename(title: string): void {
+    this.#titleInput.value = title;
+    this.#commitTitle();
+  }
+
+  /** Raises this window above its siblings. */
+  setFocused(focused: boolean, zIndex?: number): void {
+    this.element.dataset.focused = String(focused);
+    if (zIndex !== undefined) this.element.style.zIndex = String(zIndex);
+  }
+
+  /** Drops every persisted key for this window so a closed chat leaves nothing behind. */
+  clearStoredState(): void {
+    for (const base of DRAWER_SESSION_KEYS) removeSession(this.#key(base));
+  }
+
+  #key(base: string): string {
+    return `${base}:${this.sessionId}`;
+  }
+
+  #read(base: string): string | null {
+    return readSession(this.#key(base));
+  }
+
+  #readJson<T>(base: string): T | undefined {
+    return readSessionJson<T>(this.#key(base));
+  }
+
+  #write(base: string, value: string): void {
+    writeSession(this.#key(base), value);
+  }
+
+  readonly #commitTitle = (): void => {
+    const next = this.#titleInput.value.trim().slice(0, MAX_TITLE_LENGTH);
+    this.#titleInput.value = next === '' ? 'Chat' : next;
+    this.element.setAttribute('aria-label', `Build with AI chat · ${this.title}`);
+    this.#callbacks.onRename?.(this.title);
+  };
 
   setProvider(provider: ServerReadyMessage['agent']): void {
     this.#provider = provider;
@@ -450,22 +540,36 @@ export class ChatDrawer {
 
   open(focus = true, persist = true, expand = true): void {
     this.element.hidden = false;
-    if (persist) writeSession(DRAWER_OPEN_KEY, 'true');
+    if (persist) this.#write(DRAWER_OPEN_KEY, 'true');
     if (expand) this.#setMinimized(false);
     else this.#setMinimized(this.#minimized, false);
     this.#renderContext();
     this.#scheduleConnector();
     this.#scrollToLatest();
     requestAnimationFrame(() => {
+      this.#applyCascade();
       this.#constrainPosition();
       if (focus) this.#input.focus();
     });
   }
 
+  /**
+   * A window that has never been dragged starts offset from its siblings so a
+   * second chat does not open exactly on top of the first.
+   */
+  #applyCascade(): void {
+    if (this.#position !== undefined || this.#index === 0 || this.element.hidden) return;
+    const rect = this.element.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const offset = this.#index * WINDOW_CASCADE_STEP;
+    this.#position = { left: rect.left - offset, top: rect.top + offset };
+    this.#applyPosition(this.#position);
+  }
+
   hide(persist = true): void {
     this.element.hidden = true;
     this.#scheduleConnector();
-    if (persist) writeSession(DRAWER_OPEN_KEY, 'false');
+    if (persist) this.#write(DRAWER_OPEN_KEY, 'false');
   }
 
   toggleCollapsed(): void {
@@ -482,7 +586,7 @@ export class ChatDrawer {
     this.#collapse.title = control.label;
     this.#collapse.setAttribute('aria-label', this.#collapse.title);
     this.#collapse.setAttribute('aria-expanded', String(control.expanded));
-    if (persist) writeSession(DRAWER_MINIMIZED_KEY, String(minimized));
+    if (persist) this.#write(DRAWER_MINIMIZED_KEY, String(minimized));
     if (notify) this.#callbacks.onMinimizedChange?.(minimized);
     this.#scheduleConnector();
     requestAnimationFrame(() => this.#constrainPosition());
@@ -559,8 +663,35 @@ export class ChatDrawer {
     this.#scheduleConnector();
   };
 
+  /**
+   * Measures this window's own attached elements. The page's live selection
+   * belongs to whichever window is focused, so a window must anchor its arrow
+   * to what *it* is attached to or every window would point at the same node.
+   */
+  #attachmentAnchor(): SelectionAnchor | undefined {
+    if (this.#attachments.length === 0) return undefined;
+    const wanted = new Set(this.#attachments.map(({ nodeId }) => nodeId));
+    const rects = [...document.querySelectorAll('[data-astro-ai-id]')]
+      .filter((node) => wanted.has(node.getAttribute('data-astro-ai-id') ?? ''))
+      .map((node) => node.getBoundingClientRect())
+      .filter(({ width, height }) => width > 0 || height > 0);
+    if (rects.length === 0) return undefined;
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
+    return { left, right, top, bottom, width: right - left, height: bottom - top };
+  }
+
+  /** Re-measures the connector after the page geometry may have changed. */
+  refreshConnector(): void {
+    this.#scheduleConnector();
+  }
+
   #renderConnector(): void {
-    const target = this.#selectionAnchor;
+    // Fall back to the live selection only while this window's own attachment
+    // cannot be measured, such as immediately after an HMR re-render.
+    const target = this.#attachmentAnchor() ?? this.#selectionAnchor;
     if (
       target === undefined ||
       this.element.hidden ||
@@ -666,7 +797,7 @@ export class ChatDrawer {
       controls.append(useCurrent, lock, remove);
     }
     this.#context.append(contextCopy, controls);
-    writeSession(
+    this.#write(
       DRAWER_CONTEXT_KEY,
       JSON.stringify({
         ...(this.#attachments.length === 0 ? {} : { attachments: this.#attachments }),
@@ -826,7 +957,7 @@ export class ChatDrawer {
   }
 
   #restoreRuns(): void {
-    const restored = readSessionJson<PersistedRun[]>(DRAWER_RUNS_KEY) ?? [];
+    const restored = this.#readJson<PersistedRun[]>(DRAWER_RUNS_KEY) ?? [];
     if (!Array.isArray(restored)) return;
     for (const persisted of restored.slice(-20)) {
       if (
@@ -881,7 +1012,7 @@ export class ChatDrawer {
   }
 
   #persistRuns(): void {
-    writeSession(
+    this.#write(
       DRAWER_RUNS_KEY,
       JSON.stringify([...this.#runStates.values()].slice(-20)),
     );
@@ -958,6 +1089,7 @@ export class ChatDrawer {
     this.#scrollToLatest();
     this.#callbacks.onSubmit({
       requestId,
+      sessionId: this.sessionId,
       instruction,
       mode: this.#answerOnly ? 'answer' : 'auto',
       ...(attachments === undefined ? {} : { attachments }),
@@ -1017,7 +1149,7 @@ export class ChatDrawer {
     window.removeEventListener('pointermove', this.#dragMove);
     window.removeEventListener('pointerup', this.#endDrag);
     if (this.#position !== undefined) {
-      writeSession(DRAWER_POSITION_KEY, JSON.stringify(this.#position));
+      this.#write(DRAWER_POSITION_KEY, JSON.stringify(this.#position));
     }
   };
 
@@ -1061,7 +1193,7 @@ export class ChatDrawer {
     window.removeEventListener('pointermove', this.#resizeMove);
     window.removeEventListener('pointerup', this.#endResize);
     if (this.#position !== undefined) {
-      writeSession(DRAWER_POSITION_KEY, JSON.stringify(this.#position));
+      this.#write(DRAWER_POSITION_KEY, JSON.stringify(this.#position));
     }
   };
 
@@ -1085,7 +1217,7 @@ export class ChatDrawer {
     );
     this.#position = position;
     this.#applyPosition(position);
-    writeSession(DRAWER_POSITION_KEY, JSON.stringify(position));
+    this.#write(DRAWER_POSITION_KEY, JSON.stringify(position));
     this.#scheduleConnector();
   }
 }
@@ -1142,6 +1274,12 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .agent-mark { align-items: center; background: linear-gradient(135deg, #7c3aed, #a78bfa); border-radius: 8px; display: flex; font-size: 14px; height: 30px; justify-content: center; width: 30px; }
     .drawer-eyebrow { color: #929bab; display: block; font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
     .drawer-header h2 { font-size: 14px; line-height: 1.2; margin: 2px 0 0; }
+    .drawer-title { background: transparent; border: 1px solid transparent; border-radius: 5px; color: inherit; font: 600 14px/1.2 inherit; margin: 1px 0 0; max-width: 190px; padding: 1px 4px; width: 100%; }
+    .drawer-title:hover { border-color: #3a4250; }
+    .drawer-title:focus { background: #0b0e14; border-color: var(--accent); outline: none; }
+    .ai-chat-drawer[data-focused='false'] { opacity: .94; }
+    .ai-chat-drawer[data-focused='false'] .drawer-header { filter: saturate(.75); }
+    .ai-chat-drawer[data-minimized='true'] .new-window-button { display: none; }
     .drawer-header-actions { gap: 8px; }
     .provider-badge { background: #202631; border: 1px solid #343c49; border-radius: 999px; color: #aeb7c5; font-size: 10px; padding: 4px 8px; }
     .provider-badge[data-state='connected'] { background: #102c22; border-color: #225b45; color: #86efac; }
@@ -1345,6 +1483,7 @@ function providerLabel(provider?: string): string {
 function stageTitle(state: AgentOperationState): string {
   const titles: Partial<Record<AgentOperationState, string>> = {
     planning: 'Understanding your request',
+    queued: 'Waiting for another chat window',
     reading: 'Preparing source context',
     editing: 'Working on your request',
     validation: 'Reviewing the result',
@@ -1356,6 +1495,7 @@ function stageTitle(state: AgentOperationState): string {
 function stageLabel(state: AgentOperationState): string {
   const labels: Partial<Record<AgentOperationState, string>> = {
     planning: 'Plan',
+    queued: 'Queued',
     reading: 'Prepare',
     editing: 'Work',
     validation: 'Review',
@@ -1370,8 +1510,12 @@ function formatElapsed(milliseconds: number): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function createSelectionConnector(): [SVGSVGElement, SVGPathElement] {
+function createSelectionConnector(sessionId: string): [SVGSVGElement, SVGPathElement] {
   const namespace = 'http://www.w3.org/2000/svg';
+  // Every window owns a connector, so the marker id must be unique per window:
+  // duplicate ids all resolve to the first match, and the arrowheads of the
+  // remaining windows vanish as soon as that window is closed.
+  const markerId = `astro-ai-selection-arrow-${sessionId}`;
   const svg = document.createElementNS(namespace, 'svg');
   svg.dataset.astroAiUi = 'selection-connector';
   svg.setAttribute('aria-hidden', 'true');
@@ -1386,7 +1530,7 @@ function createSelectionConnector(): [SVGSVGElement, SVGPathElement] {
   });
   const defs = document.createElementNS(namespace, 'defs');
   const marker = document.createElementNS(namespace, 'marker');
-  marker.id = 'astro-ai-selection-arrow';
+  marker.id = markerId;
   marker.setAttribute('markerWidth', '8');
   marker.setAttribute('markerHeight', '8');
   marker.setAttribute('refX', '7');
@@ -1404,7 +1548,7 @@ function createSelectionConnector(): [SVGSVGElement, SVGPathElement] {
   path.setAttribute('stroke-linecap', 'round');
   path.setAttribute('stroke-width', '2');
   path.setAttribute('stroke-dasharray', '5 5');
-  path.setAttribute('marker-end', 'url(#astro-ai-selection-arrow)');
+  path.setAttribute('marker-end', `url(#${markerId})`);
   path.style.filter = 'drop-shadow(0 2px 4px rgb(0 0 0 / .45))';
   svg.append(defs, path);
   svg.style.display = 'none';
@@ -1448,6 +1592,14 @@ function readSession(key: string): string | null {
 function writeSession(key: string, value: string): void {
   try {
     sessionStorage.setItem(key, value);
+  } catch {
+    // Session persistence is a progressive enhancement in restricted browsers.
+  }
+}
+
+function removeSession(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
   } catch {
     // Session persistence is a progressive enhancement in restricted browsers.
   }

@@ -12,6 +12,8 @@ import type {
 export type AgentFallbackRequest = {
   instruction: string;
   reason: string;
+  /** Chat window this run belongs to. Each session keeps its own turns and workspace. */
+  sessionId?: string;
   mode?: AgentRequestMode;
   selections?: SelectionContext[];
   /** Project-relative files that the provider may modify. Undefined means project-wide. */
@@ -23,6 +25,7 @@ export type AgentFallbackRequest = {
 };
 
 export type AgentProgressState =
+  | 'queued'
   | 'reading'
   | 'editing'
   | 'validation'
@@ -51,6 +54,12 @@ export abstract class AgentFallback {
   abstract status(): Promise<AgentProviderStatus>;
 
   dispose(): void | Promise<void> {}
+
+  /** Releases the conversation and workspace held for one closed chat window. */
+  closeSession(_sessionId: string): void | Promise<void> {}
+
+  /** Releases every idle session outside the set the page still has open. */
+  retainSessions(_sessionIds: readonly string[]): void | Promise<void> {}
 
   abstract execute(
     request: AgentFallbackRequest,

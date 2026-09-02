@@ -5,6 +5,10 @@ import { JSDOM } from 'jsdom';
 import { ChatDrawer, parseAgentMarkdown } from '../dist/toolbar/chat-drawer.js';
 import { SelectionOverlay } from '../dist/toolbar/overlay.js';
 
+function testSession(sessionId = 'test-session', title = 'Chat 1') {
+  return { sessionId, title };
+}
+
 test('keyboard-selects a source-backed element and tears the overlay down cleanly', () => {
   const cleanup = installDom('<main><button data-astro-ai-id="node-1" data-astro-ai-name="button">Select</button></main>');
   try {
@@ -47,7 +51,7 @@ test('opens, minimizes, expands, and destroys the chat lifecycle', () => {
         if (minimized) overlay.disable();
         else overlay.start();
       },
-    });
+    }, testSession());
     drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
     drawer.open(false);
     assert.equal(drawer.element.hidden, false);
@@ -78,7 +82,7 @@ test('keeps an explicitly attached source selection when the visual menu closes'
     const drawer = new ChatDrawer({
       onSubmit(request) { submissions.push(request); },
       onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
-    });
+    }, testSession());
     drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
     drawer.openWithSelections([selectionContext()]);
     assert.equal(drawer.element.dataset.attachmentState, 'attached');
@@ -108,11 +112,11 @@ test('keeps an explicitly attached source selection when the visual menu closes'
 test('scrolls restored chat history to the latest message after HMR', async () => {
   const cleanup = installDom('<main></main>');
   try {
-    sessionStorage.setItem('astro-ai:drawer-runs', JSON.stringify([
+    sessionStorage.setItem('astro-ai:drawer-runs:test-session', JSON.stringify([
       persistedRun('first-run', 'First message', 1),
       persistedRun('last-run', 'Latest message', 2),
     ]));
-    const drawer = new ChatDrawer({ onSubmit() {}, onCancel() {}, onUndo() {}, onRedo() {}, onClose() {} });
+    const drawer = new ChatDrawer({ onSubmit() {}, onCancel() {}, onUndo() {}, onRedo() {}, onClose() {} }, testSession());
     const messages = drawer.element.querySelector('.chat-messages');
     Object.defineProperty(messages, 'scrollHeight', { configurable: true, value: 1200 });
     messages.scrollTop = 0;
@@ -130,7 +134,7 @@ test('attaches, displays, removes, and submits text files with a chat message', 
     const drawer = new ChatDrawer({
       onSubmit(request) { submissions.push(request); },
       onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
-    });
+    }, testSession());
     drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
     await drawer.attachFiles([{
       name: 'notes.md',
@@ -169,7 +173,7 @@ test('pastes a clipboard screenshot into the composer as an image attachment', a
     const drawer = new ChatDrawer({
       onSubmit(request) { submissions.push(request); },
       onCancel() {}, onUndo() {}, onRedo() {}, onClose() {},
-    });
+    }, testSession());
     drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
     const screenshot = {
       name: 'screenshot.png',

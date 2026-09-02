@@ -77,6 +77,21 @@ Toolbar history is stored in the browser tab's `sessionStorage`; it is not
 mirrored into Codex or Claude chat applications. Credentials remain in the CLI
 credential store and are never sent to browser code.
 
+### Multiple chat windows
+
+Use `＋` in a chat header to open another window, and rename a window by
+editing its title — for example one for building and one for reviewing. Up to
+six windows can be open at once, and they are restored on reload.
+
+Each window is an independent conversation: it keeps its own turn history,
+attachments, and isolated provider workspace, so context never leaks between
+them. Source history is deliberately shared, because every window edits the
+same project — undo and redo act on one stack and stay in sync everywhere.
+
+Runs that can change source are queued so only one applies at a time; a waiting
+window shows a `Queued` step. Answer-only runs never commit, so they continue
+to run concurrently.
+
 Attached contents are sent only with that CLI request and are not stored in
 chat history. Up to five attachments are supported. Text files are limited to
 256 KB each and screenshots to 5 MB each.

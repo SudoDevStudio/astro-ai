@@ -228,6 +228,7 @@ test('routes explicit AI requests through the fallback without a source transact
     SERVER_EVENTS.agentEvent,
     {
       requestId: 'agent-request',
+      sessionId: 'default',
       state: 'planning',
       message: 'Planning a page-level change…',
     },
@@ -271,9 +272,58 @@ test('routes explicit AI requests through the fallback without a source transact
     SERVER_EVENTS.agentEvent,
     {
       requestId: 'error-request',
+      sessionId: 'default',
       state: 'planning',
       message: 'Planning a fix for the attached error…',
     },
   ]);
   assert.equal(sent[1][1].state, 'failure');
+});
+
+test('tags every agent event with the chat window that started the run', async () => {
+  const listeners = new Map();
+  const sent = [];
+  const warnings = [];
+  const integration = buildWithAI();
+
+  integration.hooks['astro:config:setup']({
+    config: { root: new URL('../', import.meta.url) },
+    command: 'dev',
+    addDevToolbarApp() {},
+    updateConfig(config) { return config; },
+  });
+  integration.hooks['astro:server:setup']({
+    toolbar: {
+      on(event, callback) { listeners.set(event, callback); },
+      send(event, payload) { sent.push([event, payload]); },
+    },
+    logger: { warn(message) { warnings.push(message); }, debug() {} },
+  });
+
+  await listeners.get(CLIENT_EVENTS.agentInstruction)({
+    requestId: 'qa-request',
+    sessionId: 'chat-qa',
+    instruction: 'Check the cart flow',
+  });
+
+  // Without the session tag the browser cannot tell which window a progress
+  // event belongs to, and every window would render every run.
+  assert.equal(sent.length, 2);
+  for (const [, payload] of sent) assert.equal(payload.sessionId, 'chat-qa');
+
+  sent.length = 0;
+  await listeners.get(CLIENT_EVENTS.sessionClose)({ sessionId: 'chat-qa' });
+  await listeners.get(CLIENT_EVENTS.sessionClose)({});
+  await listeners.get(CLIENT_EVENTS.sessionClose)(undefined);
+  assert.deepEqual(sent, []);
+
+  await listeners.get(CLIENT_EVENTS.ready)({
+    protocolVersion: PROTOCOL_VERSION,
+    route: '/',
+    activeSessionIds: ['chat-dev'],
+  });
+  assert.equal(sent[0][0], SERVER_EVENTS.ready);
+  // The only warning is the unconfigured provider; closing or pruning a
+  // session must never warn on its own.
+  assert.deepEqual(warnings, ['No CLI agent provider is configured.']);
 });

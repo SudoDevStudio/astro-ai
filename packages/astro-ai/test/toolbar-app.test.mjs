@@ -1,0 +1,139 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { JSDOM } from 'jsdom';
+
+import app from '../dist/toolbar/app.js';
+import { CLIENT_EVENTS, PROTOCOL_VERSION, SERVER_EVENTS } from '../dist/shared/protocol.js';
+
+test('wires every chat window to one toolbar connection', async () => {
+  const cleanup = installDom();
+  try {
+    const harness = startApp();
+    const { sent, canvas } = harness;
+
+    const ready = sent.find(([event]) => event === CLIENT_EVENTS.ready);
+    assert.notEqual(ready, undefined);
+    assert.equal(ready[1].protocolVersion, PROTOCOL_VERSION);
+    assert.equal(ready[1].activeSessionIds.length, 1);
+    assert.equal(canvas.querySelectorAll('.ai-chat-drawer').length, 1);
+
+    harness.emit(SERVER_EVENTS.ready, {
+      protocolVersion: PROTOCOL_VERSION,
+      history: { canUndo: false, canRedo: false },
+      agent: { provider: 'codex', available: true, authenticated: true, message: 'Ready' },
+    });
+
+    // Opening a second window from the header adds a conversation without
+    // disturbing the first one.
+    canvas.querySelector('[aria-label="Open another chat window"]').click();
+    assert.equal(canvas.querySelectorAll('.ai-chat-drawer').length, 2);
+
+    const [first, second] = canvas.querySelectorAll('.ai-chat-drawer');
+    assert.notEqual(first.dataset.sessionId, second.dataset.sessionId);
+
+    sent.length = 0;
+    submit(second, 'check the cart flow');
+    const instruction = sent.find(([event]) => event === CLIENT_EVENTS.agentInstruction);
+    assert.equal(instruction[1].sessionId, second.dataset.sessionId);
+    assert.equal(instruction[1].instruction, 'check the cart flow');
+
+    // Progress reaches the window that asked, and only that window.
+    harness.emit(SERVER_EVENTS.agentEvent, {
+      requestId: instruction[1].requestId,
+      sessionId: second.dataset.sessionId,
+      state: 'queued',
+      message: 'Waiting for another chat window’s source edit to finish…',
+    });
+    assert.equal(second.querySelector('.run-step').dataset.stage, 'queued');
+    assert.equal(first.querySelector('.run-step'), null);
+
+    // Shared source history is mirrored into every window.
+    harness.emit(SERVER_EVENTS.history, { canUndo: true, canRedo: false, undoLabel: 'agent edit' });
+    for (const drawer of canvas.querySelectorAll('.ai-chat-drawer')) {
+      assert.equal(drawer.querySelector('.history-button').disabled, false);
+    }
+
+    sent.length = 0;
+    second.querySelector('[aria-label="Close this chat window"]').click();
+    assert.equal(canvas.querySelectorAll('.ai-chat-drawer').length, 1);
+    assert.deepEqual(
+      sent.find(([event]) => event === CLIENT_EVENTS.sessionClose)?.[1],
+      { sessionId: second.dataset.sessionId },
+    );
+
+    // Closing the last window closes the toolbar app itself.
+    first.querySelector('[aria-label="Close this chat window"]').click();
+    assert.deepEqual(harness.toggles.at(-1), { state: false });
+
+    // Let jsdom's mutation observers settle before the DOM globals go away.
+    canvas.remove();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally { cleanup(); }
+});
+
+function startApp() {
+  const sent = [];
+  const listeners = new Map();
+  const toggles = [];
+  const canvas = document.createElement('div');
+  document.body.append(canvas);
+  app.init(
+    canvas,
+    {
+      onToggled(callback) { listeners.set('toggle', callback); },
+      toggleState(state) { toggles.push(state); },
+    },
+    {
+      send(event, payload) { sent.push([event, payload]); },
+      on(event, callback) { listeners.set(event, callback); },
+    },
+  );
+  return {
+    sent,
+    canvas,
+    toggles,
+    emit(event, payload) { listeners.get(event)?.(payload); },
+  };
+}
+
+function submit(drawerElement, instruction) {
+  const input = drawerElement.querySelector('textarea');
+  input.value = instruction;
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  drawerElement.querySelector('form').dispatchEvent(
+    new window.Event('submit', { bubbles: true, cancelable: true }),
+  );
+}
+
+function installDom() {
+  const dom = new JSDOM('<!doctype html><html><body><main></main></body></html>', { url: 'http://localhost/' });
+  dom.window.requestAnimationFrame = (callback) => dom.window.setTimeout(() => callback(Date.now()), 0);
+  dom.window.cancelAnimationFrame = (id) => dom.window.clearTimeout(id);
+  const previous = new Map();
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    sessionStorage: dom.window.sessionStorage,
+    Element: dom.window.Element,
+    HTMLElement: dom.window.HTMLElement,
+    HTMLInputElement: dom.window.HTMLInputElement,
+    HTMLSelectElement: dom.window.HTMLSelectElement,
+    Node: dom.window.Node,
+    DOMRect: dom.window.DOMRect,
+    MutationObserver: dom.window.MutationObserver,
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+  };
+  for (const [key, value] of Object.entries(globals)) {
+    previous.set(key, globalThis[key]);
+    globalThis[key] = value;
+  }
+  return () => {
+    dom.window.close();
+    for (const [key, value] of previous) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  };
+}

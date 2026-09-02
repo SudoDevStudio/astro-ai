@@ -14,7 +14,8 @@ import {
   type VisualEditorErrorMessage,
 } from '../shared/protocol.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
-import { ChatDrawer, createChatDrawerStyle } from './chat-drawer.js';
+import { createChatDrawerStyle } from './chat-drawer.js';
+import { ChatWindowManager } from './chat-windows.js';
 import { DiagnosticActionBridge } from './diagnostic-actions.js';
 import { SelectionOverlay } from './overlay.js';
 
@@ -27,10 +28,11 @@ export default defineToolbarApp({
     const pendingInspectRequests = new Map<string, string>();
     let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
-    const drawer = new ChatDrawer({
-      onSubmit({ requestId, instruction, mode, attachments, locked, files, externalContext }) {
+    const windows = new ChatWindowManager({
+      onSubmit({ requestId, sessionId, instruction, mode, attachments, locked, files, externalContext }) {
         server.send(CLIENT_EVENTS.agentInstruction, {
           requestId,
+          sessionId,
           instruction,
           mode,
           ...(attachments === undefined
@@ -42,30 +44,33 @@ export default defineToolbarApp({
           ...(files === undefined ? {} : { files }),
           ...(externalContext === undefined ? {} : { externalContext }),
         });
-        drawer.setNotice('AI agent operation started…');
+        windows.noticeFor(sessionId, 'AI agent operation started…');
       },
       onCancel(requestId) {
         server.send(CLIENT_EVENTS.agentCancel, { requestId });
       },
       onUndo() {
-        drawer.setNotice('Undoing the last source transaction…');
+        windows.broadcastNotice('Undoing the last source transaction…');
         server.send(CLIENT_EVENTS.undo, { requestId: createRequestId() });
       },
       onRedo() {
-        drawer.setNotice('Redoing the source transaction…');
+        windows.broadcastNotice('Redoing the source transaction…');
         server.send(CLIENT_EVENTS.redo, { requestId: createRequestId() });
       },
-      onClose() {
+      onSessionClose(sessionId) {
+        server.send(CLIENT_EVENTS.sessionClose, { sessionId });
+      },
+      onEmpty() {
         app.toggleState({ state: false });
       },
-      onMinimizedChange(minimized) {
-        if (minimized) {
+      onSelectionPaused(paused) {
+        if (paused) {
           overlay.disable();
-          drawer.setNotice('Selection mode paused while chat is minimized.');
+          windows.broadcastNotice('Selection mode paused while every chat is minimized.');
         } else {
           overlay.enable();
           overlay.start();
-          drawer.setNotice('Click to select · Shift-click to add · drag to marquee');
+          windows.broadcastNotice('Click to select · Shift-click to add · drag to marquee');
           requestInsertionZones();
         }
       },
@@ -75,7 +80,7 @@ export default defineToolbarApp({
       onInspect(nodeId) {
         const requestId = createRequestId();
         pendingInspectRequests.set(requestId, nodeId);
-        drawer.setNotice('Resolving source capabilities…');
+        windows.broadcastNotice('Resolving source capabilities…');
         server.send(CLIENT_EVENTS.inspect, {
           requestId,
           nodeId,
@@ -87,61 +92,63 @@ export default defineToolbarApp({
         execute(command);
       },
       onAskAI(contexts) {
-        drawer.openWithSelections(contexts);
+        windows.openWithSelections(contexts);
       },
       onClear() {
-        drawer.setNotice('Click to select · Shift-click to add · drag to marquee');
+        windows.broadcastNotice('Click to select · Shift-click to add · drag to marquee');
       },
       onSelectionChange(contexts) {
-        drawer.setCurrentSelections(contexts);
-        if (contexts.length > 1) drawer.setNotice(`${contexts.length} source-backed elements selected.`);
+        windows.setCurrentSelections(contexts);
+        if (contexts.length > 1) {
+          windows.broadcastNotice(`${contexts.length} source-backed elements selected.`);
+        }
       },
       onSelectionAnchorChange(rect) {
-        drawer.setSelectionAnchor(rect);
+        windows.setSelectionAnchor(rect);
       },
     });
     const diagnosticActions = new DiagnosticActionBridge({
       onFix(context) {
         overlay.clearSelection();
         app.toggleState({ state: true });
-        window.setTimeout(() => drawer.openWithExternalContext(context), 0);
+        window.setTimeout(() => windows.openWithExternalContext(context), 0);
       },
     });
 
     canvas.replaceChildren(
       createChatDrawerStyle(),
-      drawer.element,
+      windows.element,
     );
-    drawer.hide(false);
+    windows.hideAll(false);
 
     app.onToggled(({ state }) => {
       writeSession(APP_OPEN_KEY, String(state));
       if (state) {
         overlay.enable();
         overlay.start();
-        drawer.open(!restoringOpenState, true, !restoringOpenState);
-        drawer.setNotice('Click to select · Shift-click to add · drag to marquee');
+        windows.openAll(!restoringOpenState, true, !restoringOpenState);
+        windows.broadcastNotice('Click to select · Shift-click to add · drag to marquee');
         requestInsertionZones();
       } else {
         overlay.disable();
-        drawer.hide();
+        windows.hideAll();
       }
       restoringOpenState = false;
     });
 
     server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent }) => {
       if (disposed || protocolVersion !== PROTOCOL_VERSION) return;
-      drawer.setProvider(agent);
-      drawer.setHistory(history);
+      windows.setProvider(agent);
+      windows.setHistory(history);
       requestInsertionZones();
       if (agent.provider !== 'none' && !agent.authenticated) {
-        drawer.setNotice(agent.message, true);
+        windows.broadcastNotice(agent.message, true);
       }
     });
     server.on<SelectionResolvedMessage>(SERVER_EVENTS.selection, ({ requestId, context }) => {
       if (disposed || !pendingInspectRequests.delete(requestId)) return;
       overlay.setSelection(context);
-      drawer.setNotice('Source-backed selection resolved locally.');
+      windows.broadcastNotice('Source-backed selection resolved locally.');
     });
     server.on<InsertionZonesResolvedMessage>(SERVER_EVENTS.insertionZones, ({ requestId, zones }) => {
       if (disposed || requestId !== insertionZonesRequestId) return;
@@ -150,13 +157,13 @@ export default defineToolbarApp({
     });
     server.on<OperationCompletedMessage>(SERVER_EVENTS.operation, ({ transaction, history }) => {
       if (disposed) return;
-      drawer.setHistory(history);
-      drawer.setNotice(`${humanize(transaction.kind)} applied; Vite HMR is updating the page.`);
+      windows.setHistory(history);
+      windows.broadcastNotice(`${humanize(transaction.kind)} applied; Vite HMR is updating the page.`);
       requestInsertionZones();
       if (transaction.kind === 'reorder-sibling') overlay.clearSelection();
     });
     server.on<HistoryChangedMessage>(SERVER_EVENTS.history, (history) => {
-      if (!disposed) drawer.setHistory(history);
+      if (!disposed) windows.setHistory(history);
     });
     server.on<VisualEditorErrorMessage>(SERVER_EVENTS.error, ({ requestId, message, fallbackEligible }) => {
       if (disposed) return;
@@ -165,15 +172,17 @@ export default defineToolbarApp({
         pendingInspectRequests.delete(requestId);
         if (nodeId !== undefined) overlay.rejectSelection(nodeId);
       }
-      drawer.setNotice(
+      windows.broadcastNotice(
         fallbackEligible ? `${message} Ask AI or open the source to continue.` : message,
         true,
       );
     });
     server.on<AgentOperationEvent>(SERVER_EVENTS.agentEvent, (event) => {
       if (disposed) return;
-      drawer.handleAgentEvent(event);
-      drawer.setNotice(
+      // Progress belongs to the window that started the run; a sibling window
+      // must not report a run it never made.
+      const drawer = windows.handleAgentEvent(event);
+      drawer?.setNotice(
         event.state === 'completion'
           ? event.transaction === undefined
             ? 'AI response completed without changing source.'
@@ -188,7 +197,8 @@ export default defineToolbarApp({
     server.send<ClientReadyMessage>(CLIENT_EVENTS.ready, {
       protocolVersion: PROTOCOL_VERSION,
       route: window.location.pathname,
-      pendingAgentRequestIds: drawer.pendingRequestIds(),
+      pendingAgentRequestIds: windows.pendingRequestIds(),
+      activeSessionIds: windows.sessionIds(),
     });
 
     if (readSession(APP_OPEN_KEY) === 'true') {
@@ -200,12 +210,12 @@ export default defineToolbarApp({
       disposed = true;
       overlay.destroy();
       diagnosticActions.destroy();
-      drawer.destroy();
+      windows.destroy();
     };
     import.meta.hot?.dispose(cleanup);
 
     function execute(command: DeterministicVisualCommand): void {
-      drawer.setNotice('Applying a deterministic source transformation…');
+      windows.broadcastNotice('Applying a deterministic source transformation…');
       server.send(CLIENT_EVENTS.execute, {
         requestId: createRequestId(),
         command,

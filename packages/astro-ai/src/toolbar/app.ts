@@ -91,14 +91,14 @@ export default defineToolbarApp({
       onCommand(command) {
         execute(command);
       },
-      onAskAI(contexts) {
-        windows.openWithSelections(contexts);
+      onAskAI(contexts, elements) {
+        windows.openWithSelections(contexts, elements);
       },
       onClear() {
         windows.broadcastNotice('Click to select · Shift-click to add · drag to marquee');
       },
-      onSelectionChange(contexts) {
-        windows.setCurrentSelections(contexts);
+      onSelectionChange(contexts, elements) {
+        windows.setCurrentSelections(contexts, elements);
         if (contexts.length > 1) {
           windows.broadcastNotice(`${contexts.length} source-backed elements selected.`);
         }
@@ -115,18 +115,32 @@ export default defineToolbarApp({
       },
     });
 
-    canvas.replaceChildren(
-      createChatDrawerStyle(),
-      windows.element,
-    );
+    const drawerStyle = createChatDrawerStyle();
+    canvas.replaceChildren(drawerStyle, windows.element);
     windows.hideAll(false);
+
+    /**
+     * Astro's app canvas rewrites its own shadow root in `connectedCallback`,
+     * and a client-side navigation re-appends the toolbar to the swapped body,
+     * which reconnects the canvas and throws away everything rendered into it.
+     * The chat windows survive as objects, so they only need remounting.
+     */
+    function ensureMounted(): void {
+      if (windows.element.parentNode === canvas) return;
+      canvas.append(drawerStyle, windows.element);
+    }
 
     app.onToggled(({ state }) => {
       writeSession(APP_OPEN_KEY, String(state));
       if (state) {
+        ensureMounted();
         overlay.enable();
         overlay.start();
-        windows.openAll(!restoringOpenState, true, !restoringOpenState);
+        // Astro re-applies app status when the toolbar reconnects after a
+        // navigation. That is a re-assert, not the user opening the app, so it
+        // must not steal focus or expand a window they deliberately collapsed.
+        const opening = !restoringOpenState && !windows.visible;
+        windows.openAll(opening, true, opening);
         windows.broadcastNotice('Click to select · Shift-click to add · drag to marquee');
         requestInsertionZones();
       } else {
@@ -205,9 +219,32 @@ export default defineToolbarApp({
       window.setTimeout(() => app.toggleState({ state: true }), 0);
     }
 
+    // A client-side navigation swaps the document body and moves the toolbar
+    // into it. Every selection and node id then refers to a page that is gone,
+    // and the view transition can leave the chat windows hidden behind its
+    // snapshot, so the editor re-establishes itself against the new page.
+    const onNavigation = (): void => {
+      if (disposed) return;
+      ensureMounted();
+      overlay.clearSelection();
+      windows.handleNavigation();
+      if (windows.visible || readSession(APP_OPEN_KEY) === 'true') {
+        overlay.enable();
+        overlay.start();
+        windows.openAll(false, true, false);
+      }
+      requestInsertionZones();
+    };
+    document.addEventListener('astro:after-swap', onNavigation);
+    document.addEventListener('astro:page-load', onNavigation);
+    window.addEventListener('popstate', onNavigation);
+
     const cleanup = (): void => {
       if (disposed) return;
       disposed = true;
+      document.removeEventListener('astro:after-swap', onNavigation);
+      document.removeEventListener('astro:page-load', onNavigation);
+      window.removeEventListener('popstate', onNavigation);
       overlay.destroy();
       diagnosticActions.destroy();
       windows.destroy();

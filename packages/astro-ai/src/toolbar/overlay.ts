@@ -2,6 +2,7 @@ import type { SelectionContext, SourceInsertionZone } from '../shared/selection-
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import { middleTruncatePath } from './action-model.js';
 import { ContextualActionBar } from './contextual-actions.js';
+import { EDITOR_LAYERS } from './layers.js';
 
 const NODE_SELECTOR = '[data-astro-ai-id]';
 const MARQUEE_THRESHOLD = 6;
@@ -22,9 +23,9 @@ export type SelectionOverlayCallbacks = {
   onInspect(nodeId: string): void;
   onActiveChange(active: boolean): void;
   onCommand(command: DeterministicVisualCommand): void;
-  onAskAI(contexts: SelectionContext[]): void;
+  onAskAI(contexts: SelectionContext[], elements: HTMLElement[]): void;
   onClear(): void;
-  onSelectionChange(contexts: SelectionContext[]): void;
+  onSelectionChange(contexts: SelectionContext[], elements: HTMLElement[]): void;
   onSelectionAnchorChange(rect?: DOMRect): void;
 };
 
@@ -57,14 +58,27 @@ export class SelectionOverlay {
     this.#marquee = createMarquee();
     this.#actions = new ContextualActionBar({
       onCommand: callbacks.onCommand,
-      onAskAI: callbacks.onAskAI,
+      onAskAI: (contexts) => callbacks.onAskAI(contexts, this.#elementsFor(contexts)),
       onClear: () => this.clearSelection(),
+      onClickThrough: (target) => this.clickThrough(target),
     });
     document.documentElement.append(this.#hover, this.#marquee);
   }
 
   get active(): boolean {
     return this.#active;
+  }
+
+  /**
+   * Resolves the exact elements behind a selection. A source node rendered in a
+   * loop yields many DOM nodes sharing one id, so only the overlay knows which
+   * repetition was actually picked.
+   */
+  #elementsFor(contexts: SelectionContext[]): HTMLElement[] {
+    return contexts.flatMap(({ selectedNode }) => {
+      const element = this.#selected.get(selectedNode.nodeId)?.element;
+      return element === undefined ? [] : [element];
+    });
   }
 
   enable(): void {
@@ -140,7 +154,7 @@ export class SelectionOverlay {
       button.title = `Insert a native Astro element into ${zone.file}`;
       Object.assign(button.style, {
         position: 'fixed',
-        zIndex: '2147483646',
+        zIndex: String(EDITOR_LAYERS.insertionControl),
         border: '1px solid #8b5cf6',
         borderRadius: '999px',
         background: '#181b23',
@@ -282,6 +296,30 @@ export class SelectionOverlay {
     if (!this.#marqueeActive) this.#hideHover();
   };
 
+  /**
+   * Delivers a real click to the page. Selection mode intercepts clicks to
+   * pick elements, so interception is lifted for the dispatch and restored
+   * afterwards — without this there is no way to open a menu or switch a tab
+   * to reach the state you actually want to edit.
+   */
+  clickThrough(target: HTMLElement): boolean {
+    if (!target.isConnected) return false;
+    const wasActive = this.#active;
+    if (wasActive) this.stop();
+    try {
+      target.click();
+    } finally {
+      // Restore on the next task so the page's own handlers and any resulting
+      // re-render settle before clicks are captured again.
+      if (wasActive) {
+        window.setTimeout(() => {
+          if (this.#enabled) this.start();
+        }, 0);
+      }
+    }
+    return true;
+  }
+
   readonly #onClick = (event: MouseEvent): void => {
     if (this.#suppressClick) {
       event.preventDefault();
@@ -337,7 +375,13 @@ export class SelectionOverlay {
     this.#mutationTimer = window.setTimeout(() => {
       this.#mutationTimer = undefined;
       for (const [nodeId, item] of this.#selected) {
-        const relocated = findNodeById(nodeId);
+        // A node id identifies a source location, not a DOM node: one rendered
+        // in a loop repeats its id on every instance. Re-resolving by id would
+        // silently rebind the selection to the first repetition, so the element
+        // that is still on the page is kept as-is.
+        const relocated = item.element.isConnected
+          ? item.element
+          : findNodeById(nodeId);
         if (relocated === undefined) {
           this.#removeItem(nodeId);
           continue;
@@ -362,7 +406,7 @@ export class SelectionOverlay {
     if (items.length === 0) {
       this.#primaryNodeId = undefined;
       this.#actions.hide();
-      this.#callbacks.onSelectionChange([]);
+      this.#callbacks.onSelectionChange([], []);
       this.#callbacks.onSelectionAnchorChange();
       return;
     }
@@ -373,7 +417,10 @@ export class SelectionOverlay {
       if (items.length === 1) this.#actions.show(primary.context, primary.element);
       else this.#actions.showMultiple(items.map(({ context }) => context), primary.element);
     }
-    this.#callbacks.onSelectionChange(items.map(({ context }) => context));
+    this.#callbacks.onSelectionChange(
+      items.map(({ context }) => context),
+      items.map(({ element }) => element),
+    );
     this.#emitAnchor();
   }
 
@@ -501,7 +548,7 @@ function createHighlight(selected: boolean): [HTMLDivElement, HTMLSpanElement, H
   const highlight = document.createElement('div');
   highlight.dataset.astroAiUi = selected ? 'selection' : 'hover';
   Object.assign(highlight.style, {
-    position: 'fixed', zIndex: selected ? '2147483645' : '2147483644', pointerEvents: 'none',
+    position: 'fixed', zIndex: String(selected ? EDITOR_LAYERS.selectionOutline : EDITOR_LAYERS.hoverOutline), pointerEvents: 'none',
     border: `2px ${selected ? 'solid' : 'dashed'} ${selected ? '#8b5cf6' : '#a78bfa'}`,
     borderRadius: '4px', background: selected ? 'rgb(139 92 246 / 0.08)' : 'rgb(167 139 250 / 0.04)',
     boxSizing: 'border-box', display: 'none',
@@ -526,7 +573,7 @@ function createMarquee(): HTMLDivElement {
   const marquee = document.createElement('div');
   marquee.dataset.astroAiUi = 'marquee';
   Object.assign(marquee.style, {
-    position: 'fixed', zIndex: '2147483646', pointerEvents: 'none', border: '1px solid #c4b5fd',
+    position: 'fixed', zIndex: String(EDITOR_LAYERS.marquee), pointerEvents: 'none', border: '1px solid #c4b5fd',
     borderRadius: '3px', background: 'rgb(139 92 246 / 0.16)', boxShadow: '0 0 0 1px rgb(76 29 149 / .35) inset', display: 'none',
   });
   return marquee;

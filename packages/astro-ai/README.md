@@ -34,6 +34,8 @@ codex login
 ## Features
 
 - Select and inspect source-backed Astro, JSX, and TSX elements.
+- **Click** a selected element to drive the running app while selection mode
+  stays on — open a menu or switch a tab, then edit what it reveals.
 - Edit literal text and props without using AI.
 - Reorder, remove, insert, and move compatible source nodes.
 - Multi-select by Shift-click or drag marquee.
@@ -91,6 +93,12 @@ same project — undo and redo act on one stack and stay in sync everywhere.
 Runs that can change source are queued so only one applies at a time; a waiting
 window shows a `Queued` step. Answer-only runs never commit, so they continue
 to run concurrently.
+
+On a client-side navigation with `<ClientRouter />`, the editor re-establishes
+itself against the new page: the selection is cleared because its elements no
+longer exist, each window drops its stale attachment, insertion zones are
+re-requested for the new route, and the windows are restored and re-fitted to
+the viewport. Conversations and source history are kept.
 
 Attached contents are sent only with that CLI request and are not stored in
 chat history. Up to five attachments are supported. Text files are limited to

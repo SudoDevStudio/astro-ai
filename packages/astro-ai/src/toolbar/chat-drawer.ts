@@ -7,6 +7,7 @@ import type {
   ServerReadyMessage,
 } from '../shared/protocol.js';
 import type { SelectionContext } from '../shared/selection-context.js';
+import { EDITOR_LAYERS } from './layers.js';
 import {
   createSelectionAttachment,
   middleTruncatePath,
@@ -135,6 +136,9 @@ export class ChatDrawer {
   readonly #drawerResizeObserver: ResizeObserver;
   #provider: ServerReadyMessage['agent'] | undefined;
   #currentSelections: SelectionContext[] = [];
+  /** The exact elements behind the current selection and the attachment. */
+  #currentSelectionElements: HTMLElement[] = [];
+  #attachmentElements: HTMLElement[] = [];
   #attachments: SelectionAttachment[] = [];
   #files: AgentFileAttachment[] = [];
   #externalContext: AgentExternalContext | undefined;
@@ -315,10 +319,19 @@ export class ChatDrawer {
     if (this.#position !== undefined) this.#applyPosition(this.#position);
     [this.#connector, this.#connectorPath] = createSelectionConnector(options.sessionId);
     document.documentElement.append(this.#connector);
-    this.#drawerResizeObserver = new ResizeObserver(() => this.#scheduleConnector());
+    // The window's own size settles after fonts and restored content land, and
+    // a taller window can push itself off screen, so re-clamp whenever it
+    // changes rather than only on the one frame after opening.
+    this.#drawerResizeObserver = new ResizeObserver(() => {
+      this.#recoverPosition();
+      this.#scheduleConnector();
+    });
     this.#drawerResizeObserver.observe(this.element);
     window.addEventListener('scroll', this.#scheduleConnector, true);
     window.addEventListener('resize', this.#onViewportResize);
+    // A back/forward restore reruns no open or resize, so the window would keep
+    // whatever position the previous page left it at.
+    window.addEventListener('pageshow', this.#onViewportResize);
     this.#renderContext();
     this.#renderFiles();
     this.#restoreRuns();
@@ -475,8 +488,9 @@ export class ChatDrawer {
     void this.attachFiles(images);
   };
 
-  setCurrentSelections(contexts: SelectionContext[]): void {
+  setCurrentSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
     this.#currentSelections = [...contexts];
+    this.#currentSelectionElements = [...elements];
     // An empty overlay selection can be transient (for example, when the
     // toolbar's hover menu closes). Keep the composer attachment until the
     // user explicitly removes it; a new source selection may still replace it.
@@ -515,11 +529,13 @@ export class ChatDrawer {
     this.#notice.textContent = message;
   }
 
-  openWithSelections(contexts: SelectionContext[]): void {
+  openWithSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
     this.#currentSelections = [...contexts];
+    this.#currentSelectionElements = [...elements];
     // Choosing Ask AI on an element is an explicit attachment choice and must
     // replace stale drawer context, even if an older attachment was locked.
     this.#attachments = contexts.map(createSelectionAttachment);
+    this.#attachmentElements = [...elements];
     this.#externalContext = undefined;
     this.#locked = false;
     this.open();
@@ -527,7 +543,9 @@ export class ChatDrawer {
 
   openWithExternalContext(context: AgentExternalContext): void {
     this.#currentSelections = [];
+    this.#currentSelectionElements = [];
     this.#attachments = [];
+    this.#attachmentElements = [];
     this.#externalContext = { ...context };
     this.#locked = false;
     this.setSelectionAnchor();
@@ -536,6 +554,26 @@ export class ChatDrawer {
       ? 'Fix this development error.'
       : 'Fix this audit issue.';
     this.#syncComposer();
+  }
+
+  /**
+   * Handles a client-side navigation. The page's DOM was replaced, so every
+   * node id this window held now points at an element that no longer exists,
+   * and the view transition can leave the window itself stale or hidden.
+   */
+  handleNavigation(): void {
+    this.#currentSelections = [];
+    this.#currentSelectionElements = [];
+    this.#attachments = [];
+    this.#attachmentElements = [];
+    this.#locked = false;
+    this.#selectionAnchor = undefined;
+    this.#renderContext();
+    this.#scheduleConnector();
+    if (this.element.hidden) return;
+    // Re-assert the window after the transition has released its snapshot.
+    requestAnimationFrame(() => this.#recoverPosition());
+    window.setTimeout(() => this.#recoverPosition(), 0);
   }
 
   open(focus = true, persist = true, expand = true): void {
@@ -548,9 +586,35 @@ export class ChatDrawer {
     this.#scrollToLatest();
     requestAnimationFrame(() => {
       this.#applyCascade();
-      this.#constrainPosition();
+      this.#recoverPosition();
       if (focus) this.#input.focus();
     });
+    // The first frame after opening can measure a canvas the host has not laid
+    // out yet, which reports a 0x0 box and skips the check entirely. A second
+    // deferred pass runs once layout has certainly settled.
+    window.setTimeout(() => this.#recoverPosition(), 0);
+  }
+
+  /**
+   * Guarantees the window is reachable. A stored position that no longer puts
+   * it on screen is discarded outright rather than clamped: the saved value is
+   * already known bad, and the default corner is known good.
+   */
+  #recoverPosition(): void {
+    if (this.element.hidden) return;
+    const rect = this.element.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    if (this.#position !== undefined && !intersectsViewport(rect)) {
+      this.#position = undefined;
+      removeSession(this.#key(DRAWER_POSITION_KEY));
+      this.element.style.removeProperty('left');
+      this.element.style.removeProperty('top');
+      this.element.style.removeProperty('right');
+      this.element.style.removeProperty('bottom');
+      this.#scheduleConnector();
+      return;
+    }
+    this.#constrainPosition();
   }
 
   /**
@@ -589,7 +653,7 @@ export class ChatDrawer {
     if (persist) this.#write(DRAWER_MINIMIZED_KEY, String(minimized));
     if (notify) this.#callbacks.onMinimizedChange?.(minimized);
     this.#scheduleConnector();
-    requestAnimationFrame(() => this.#constrainPosition());
+    requestAnimationFrame(() => this.#recoverPosition());
   }
 
   handleAgentEvent(event: AgentOperationEvent): void {
@@ -646,6 +710,7 @@ export class ChatDrawer {
     this.#drawerResizeObserver.disconnect();
     window.removeEventListener('scroll', this.#scheduleConnector, true);
     window.removeEventListener('resize', this.#onViewportResize);
+    window.removeEventListener('pageshow', this.#onViewportResize);
     this.#connector.remove();
     this.element.remove();
   }
@@ -659,7 +724,7 @@ export class ChatDrawer {
   };
 
   readonly #onViewportResize = (): void => {
-    this.#constrainPosition();
+    this.#recoverPosition();
     this.#scheduleConnector();
   };
 
@@ -670,9 +735,9 @@ export class ChatDrawer {
    */
   #attachmentAnchor(): SelectionAnchor | undefined {
     if (this.#attachments.length === 0) return undefined;
-    const wanted = new Set(this.#attachments.map(({ nodeId }) => nodeId));
-    const rects = [...document.querySelectorAll('[data-astro-ai-id]')]
-      .filter((node) => wanted.has(node.getAttribute('data-astro-ai-id') ?? ''))
+    const live = this.#attachmentElements.filter((node) => node.isConnected);
+    const nodes = live.length > 0 ? live : this.#attachmentsById();
+    const rects = nodes
       .map((node) => node.getBoundingClientRect())
       .filter(({ width, height }) => width > 0 || height > 0);
     if (rects.length === 0) return undefined;
@@ -681,6 +746,22 @@ export class ChatDrawer {
     const top = Math.min(...rects.map((rect) => rect.top));
     const bottom = Math.max(...rects.map((rect) => rect.bottom));
     return { left, right, top, bottom, width: right - left, height: bottom - top };
+  }
+
+  /**
+   * Last-resort lookup once the attached elements are gone, such as after HMR
+   * replaced them. Ids are not unique — a node rendered in a loop repeats its
+   * id on every instance — so this takes only the first match per id. Spanning
+   * every repetition would put the arrow in the empty middle of the group.
+   */
+  #attachmentsById(): HTMLElement[] {
+    const wanted = new Set(this.#attachments.map(({ nodeId }) => nodeId));
+    const first = new Map<string, HTMLElement>();
+    for (const node of document.querySelectorAll<HTMLElement>('[data-astro-ai-id]')) {
+      const id = node.getAttribute('data-astro-ai-id') ?? '';
+      if (wanted.has(id) && !first.has(id)) first.set(id, node);
+    }
+    return [...first.values()];
   }
 
   /** Re-measures the connector after the page geometry may have changed. */
@@ -779,6 +860,7 @@ export class ChatDrawer {
       const useCurrent = iconButton('↻', 'Replace with current selection', () => {
         if (this.#currentSelections.length === 0 || this.#locked) return;
         this.#attachments = this.#currentSelections.map(createSelectionAttachment);
+        this.#attachmentElements = [...this.#currentSelectionElements];
         this.#renderContext();
       });
       useCurrent.disabled = this.#currentSelections.length === 0 || this.#locked;
@@ -791,6 +873,7 @@ export class ChatDrawer {
       const remove = iconButton('×', 'Remove attachment', () => {
         if (this.#locked) return;
         this.#attachments = [];
+        this.#attachmentElements = [];
         this.#renderContext();
       });
       remove.disabled = this.#attachments.length === 0 || this.#locked;
@@ -1127,7 +1210,7 @@ export class ChatDrawer {
   readonly #dragMove = (event: PointerEvent): void => {
     if (this.#dragOffset === undefined) return;
     const rect = this.element.getBoundingClientRect();
-    const margin = window.matchMedia('(max-width: 720px)').matches ? 0 : 8;
+    const margin = isNarrowViewport() ? 0 : 8;
     const position = constrainChatWindowPosition(
       {
         left: event.clientX - this.#dragOffset.left,
@@ -1167,7 +1250,7 @@ export class ChatDrawer {
 
   readonly #resizeMove = (event: PointerEvent): void => {
     if (this.#resizeBounds === undefined) return;
-    if (window.matchMedia('(max-width: 720px)').matches) {
+    if (isNarrowViewport()) {
       const height = clamp(this.#resizeBounds.bottom - event.clientY, 280, window.innerHeight * 0.92);
       this.element.style.height = `${height}px`;
       this.#position = {
@@ -1204,17 +1287,31 @@ export class ChatDrawer {
     this.element.style.bottom = 'auto';
   }
 
+  /**
+   * Pulls the window back on screen. This runs for windows that were never
+   * dragged too: a restored position, a cascade offset, or a viewport that
+   * shrank between page loads can all leave a window off screen, and a chat
+   * you cannot see is a chat you cannot close.
+   */
   #constrainPosition(): void {
-    if (this.#position === undefined || this.element.hidden) return;
+    if (this.element.hidden) return;
     const rect = this.element.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const margin = window.matchMedia('(max-width: 720px)').matches ? 0 : 8;
+    const margin = isNarrowViewport() ? 0 : 8;
+    const current = this.#position ?? { left: rect.left, top: rect.top };
     const position = constrainChatWindowPosition(
-      this.#position,
+      current,
       { width: rect.width, height: rect.height },
       { width: window.innerWidth, height: window.innerHeight },
       margin,
     );
+    // An untouched window that is already on screen keeps its CSS anchoring,
+    // so it stays pinned to the corner as the viewport changes.
+    if (
+      this.#position === undefined &&
+      position.left === current.left &&
+      position.top === current.top
+    ) return;
     this.#position = position;
     this.#applyPosition(position);
     this.#write(DRAWER_POSITION_KEY, JSON.stringify(position));
@@ -1253,7 +1350,7 @@ export function constrainChatWindowPosition(
 export function createChatDrawerStyle(): HTMLStyleElement {
   const style = document.createElement('style');
   style.textContent = `
-    .ai-chat-drawer { --accent: #8b5cf6; background: #0e1117; border: 1px solid #343c49; border-radius: 14px; bottom: 16px; box-shadow: -12px 18px 60px rgb(0 0 0 / .42); box-sizing: border-box; color: #f8fafc; display: grid; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; grid-template-rows: auto auto 1fr; height: min(760px, calc(100vh - 32px)); max-height: 760px; overflow: hidden; position: fixed; right: 16px; top: 16px; width: min(460px, calc(100vw - 32px)); z-index: 2147483646; }
+    .ai-chat-drawer { --accent: #8b5cf6; background: #0e1117; border: 1px solid #343c49; border-radius: 14px; bottom: 16px; box-shadow: -12px 18px 60px rgb(0 0 0 / .42); box-sizing: border-box; color: #f8fafc; display: grid; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; grid-template-rows: auto auto 1fr; height: min(760px, calc(100vh - 32px)); max-height: 760px; overflow: hidden; position: fixed; right: 16px; top: 16px; width: min(460px, calc(100vw - 32px)); z-index: ${EDITOR_LAYERS.chatWindowTop}; }
     .ai-chat-drawer[hidden] { display: none; }
     .ai-chat-drawer[data-context='page'] { --accent: #c084fc; background: linear-gradient(165deg, #24143b 0%, #151324 52%, #10131a 100%); border-color: #6d4bb0; }
     .ai-chat-drawer[data-context='selection'] { background: linear-gradient(165deg, #111827 0%, #0e1117 42%); border-color: #6d5ac7; }
@@ -1526,7 +1623,7 @@ function createSelectionConnector(sessionId: string): [SVGSVGElement, SVGPathEle
     position: 'fixed',
     width: '100vw',
     height: '100vh',
-    zIndex: '2147483643',
+    zIndex: String(EDITOR_LAYERS.selectionConnector),
   });
   const defs = document.createElementNS(namespace, 'defs');
   const marker = document.createElementNS(namespace, 'marker');
@@ -1579,6 +1676,35 @@ function iconButton(label: string, title: string, onClick: () => void): HTMLButt
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+/**
+ * Never throws. This decides the margin used to pull a window back on screen,
+ * and an exception there would leave the window stranded out of view, so a
+ * host without matchMedia falls back to the desktop margin.
+ */
+/** True when any part of the box is inside the viewport. */
+export function intersectsViewport(
+  rect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>,
+  viewport: { width: number; height: number } = {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  },
+): boolean {
+  return (
+    rect.right > 0 &&
+    rect.bottom > 0 &&
+    rect.left < viewport.width &&
+    rect.top < viewport.height
+  );
+}
+
+function isNarrowViewport(): boolean {
+  try {
+    return window.matchMedia?.('(max-width: 720px)').matches === true;
+  } catch {
+    return false;
+  }
 }
 
 function readSession(key: string): string | null {

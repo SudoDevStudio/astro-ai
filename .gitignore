@@ -36,3 +36,5 @@ tmp/
 
 .claude
 .claude/settings.json
+with-astro
+with-astro/*

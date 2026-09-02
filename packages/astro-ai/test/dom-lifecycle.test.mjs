@@ -248,11 +248,11 @@ test('parses code blocks and lists without producing executable HTML', () => {
   ]);
 });
 
-function selectionContext() {
+function selectionContext(nodeId = 'node-1') {
   const source = { file: 'src/page.astro', start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 20, offset: 20 } };
   return {
     route: '/',
-    selectedNode: { nodeId: 'node-1', tagName: 'button', literalText: 'Select', source },
+    selectedNode: { nodeId, tagName: 'button', literalText: 'Select', source },
     parentComponents: [],
     capabilities: {
       editableText: true,
@@ -313,4 +313,112 @@ function installDom(markup) {
       else globalThis[key] = value;
     }
   };
+}
+
+test('clicks through to the page without leaving selection mode', async () => {
+  const cleanup = installDom(
+    '<main><button data-astro-ai-id="tab-1" data-astro-ai-name="button">Catalog</button></main>',
+  );
+  try {
+    const pageClicks = [];
+    const target = document.querySelector('button');
+    target.addEventListener('click', () => pageClicks.push('page'));
+
+    const overlay = new SelectionOverlay({
+      onInspect() {}, onActiveChange() {}, onCommand() {}, onAskAI() {}, onClear() {},
+      onSelectionChange() {}, onSelectionAnchorChange() {},
+    });
+    overlay.start();
+
+    // Selection mode owns page clicks, so a plain click never reaches the app.
+    target.click();
+    assert.deepEqual(pageClicks, []);
+
+    assert.equal(overlay.clickThrough(target), true);
+    assert.deepEqual(pageClicks, ['page']);
+
+    // Interception comes back once the click and any re-render have settled.
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+    assert.equal(overlay.active, true);
+    target.click();
+    assert.deepEqual(pageClicks, ['page']);
+
+    assert.equal(overlay.clickThrough(document.createElement('button')), false);
+    overlay.destroy();
+  } finally { cleanup(); }
+});
+
+test('offers Click first in the action bar and dispatches it to the page', async () => {
+  const cleanup = installDom(
+    '<main><button data-astro-ai-id="node-1" data-astro-ai-name="button">Catalog</button></main>',
+  );
+  try {
+    const pageClicks = [];
+    const cleared = [];
+    document.querySelector('button').addEventListener('click', () => pageClicks.push('page'));
+
+    const overlay = new SelectionOverlay({
+      onInspect() {}, onActiveChange() {}, onCommand() {}, onAskAI() {},
+      onClear() { cleared.push('clear'); },
+      onSelectionChange() {}, onSelectionAnchorChange() {},
+    });
+    overlay.start();
+    const target = document.querySelector('button');
+    target.focus();
+    target.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    overlay.setSelection(selectionContext());
+
+    const bar = document.querySelector('[data-astro-ai-ui="actions"]').shadowRoot;
+    const labels = [...bar.querySelectorAll('[data-action]')].map((node) => node.textContent);
+    assert.equal(labels[0], 'Click');
+    assert.equal(labels.includes('Props'), false);
+    assert.equal(labels.indexOf('Ask AI') > 0, true);
+
+    bar.querySelector('[data-action="click"]').click();
+    assert.deepEqual(pageClicks, ['page']);
+    // The click can navigate or re-render, so the bar releases the selection.
+    assert.deepEqual(cleared, ['clear']);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+    assert.equal(overlay.active, true);
+    overlay.destroy();
+  } finally { cleanup(); }
+});
+
+test('keeps a selection on the repetition that was picked, not the first', async () => {
+  const cleanup = installDom(
+    '<main><article data-astro-ai-id="card" data-astro-ai-name="article">One</article>'
+    + '<article data-astro-ai-id="card" data-astro-ai-name="article">Two</article></main>',
+  );
+  try {
+    const [first, second] = document.querySelectorAll('article');
+    stub(first, { left: 0, top: 0, width: 100, height: 50 });
+    stub(second, { left: 0, top: 400, width: 100, height: 50 });
+
+    const overlay = new SelectionOverlay({
+      onInspect() {}, onActiveChange() {}, onCommand() {}, onAskAI() {}, onClear() {},
+      onSelectionChange() {}, onSelectionAnchorChange() {},
+    });
+    overlay.start();
+    second.focus();
+    second.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    overlay.setSelection(selectionContext('card'));
+
+    const highlight = document.querySelector('[data-astro-ai-ui="selection"]');
+    assert.equal(highlight.style.top, '400px');
+
+    // A node id names a source location, so both articles carry the same one.
+    // Any page mutation used to re-resolve it and jump to the first article.
+    document.querySelector('main').append(document.createElement('span'));
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    assert.equal(highlight.style.top, '400px');
+    overlay.destroy();
+  } finally { cleanup(); }
+});
+
+function stub(element, { left, top, width, height }) {
+  element.getBoundingClientRect = () => ({
+    left, top, width, height, right: left + width, bottom: top + height, x: left, y: top,
+  });
 }

@@ -1,6 +1,6 @@
 import type { SelectionContext } from '../shared/selection-context.js';
 
-export type ContextualActionId = 'edit' | 'props' | 'move' | 'remove' | 'ask-ai' | 'source';
+export type ContextualActionId = 'click' | 'edit' | 'props' | 'move' | 'remove' | 'ask-ai' | 'source';
 
 export type ContextualAction = {
   id: ContextualActionId;
@@ -19,7 +19,10 @@ export type SelectionAttachment = {
 };
 
 export function contextualActions(context: SelectionContext): ContextualAction[] {
-  const actions: ContextualAction[] = [];
+  // Selection mode swallows page clicks, so driving the app to the state you
+  // want to edit needs an explicit way through. It leads because it changes no
+  // source and is often the first thing you do on a selected element.
+  const actions: ContextualAction[] = [{ id: 'click', label: 'Click' }];
   if (context.capabilities.editableText) actions.push({ id: 'edit', label: 'Edit' });
   if (context.capabilities.editableProps.length > 0) actions.push({ id: 'props', label: 'Props' });
   if (context.capabilities.movable || context.capabilities.reorderable) {

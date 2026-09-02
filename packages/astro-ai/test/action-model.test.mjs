@@ -43,7 +43,7 @@ function context(overrides = {}) {
 test('exposes only contextual actions backed by proven capabilities', () => {
   assert.deepEqual(
     contextualActions(context()).map(({ id }) => id),
-    ['edit', 'move', 'ask-ai', 'source'],
+    ['click', 'edit', 'move', 'ask-ai', 'source'],
   );
 
   const readOnly = context({
@@ -59,10 +59,12 @@ test('exposes only contextual actions backed by proven capabilities', () => {
       },
     },
   });
+  // Click leads every element: it changes no source, so it needs no capability.
   assert.deepEqual(
     contextualActions(readOnly).map(({ id }) => id),
-    ['ask-ai', 'source'],
+    ['click', 'ask-ai', 'source'],
   );
+  assert.equal(contextualActions(readOnly)[0].label, 'Click');
 });
 
 test('creates an immutable per-message selection attachment', () => {

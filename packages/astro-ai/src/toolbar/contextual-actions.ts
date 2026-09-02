@@ -1,5 +1,6 @@
 import type { SelectionContext } from '../shared/selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
+import { EDITOR_LAYERS } from './layers.js';
 import {
   contextualActions,
   type ContextualActionId,
@@ -10,6 +11,8 @@ export type ContextualActionCallbacks = {
   onCommand(command: DeterministicVisualCommand): void;
   onAskAI(contexts: SelectionContext[]): void;
   onClear(): void;
+  /** Delivers a real click to the selected element. Returns false if it is gone. */
+  onClickThrough?(target: HTMLElement): boolean;
 };
 
 type AnchorPoint = { x: number; y: number };
@@ -32,7 +35,7 @@ export class ContextualActionBar {
       display: 'none',
       position: 'fixed',
       inset: 'auto',
-      zIndex: '2147483647',
+      zIndex: String(EDITOR_LAYERS.actionBar),
     });
     this.#root = this.#host.attachShadow({ mode: 'open' });
     this.#root.append(createStyle());
@@ -147,6 +150,16 @@ export class ContextualActionBar {
 
   #activate(action: ContextualActionId): void {
     if (this.#context === undefined) return;
+    if (action === 'click') {
+      const target = this.#target;
+      // The click can navigate or re-render the page, which would leave the bar
+      // anchored to a detached element, so dismiss it first.
+      if (target !== undefined) {
+        this.#callbacks.onClear();
+        this.#callbacks.onClickThrough?.(target);
+      }
+      return;
+    }
     if (action === 'ask-ai') {
       this.#callbacks.onAskAI([this.#context]);
       return;

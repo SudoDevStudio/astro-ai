@@ -6,6 +6,7 @@ import type {
 import { DEFAULT_SESSION_ID } from '../shared/protocol.js';
 import type { SelectionContext } from '../shared/selection-context.js';
 import { ChatDrawer, type AgentSubmit } from './chat-drawer.js';
+import { chatWindowLayer } from './layers.js';
 
 export type ChatSessionRecord = { id: string; title: string };
 
@@ -24,7 +25,6 @@ export type ChatWindowCallbacks = {
 
 const SESSIONS_KEY = 'astro-ai:chat-sessions';
 const FOCUS_KEY = 'astro-ai:chat-focused';
-const BASE_Z_INDEX = 2147483600;
 export const MAX_CHAT_WINDOWS = 6;
 
 /**
@@ -40,7 +40,8 @@ export class ChatWindowManager {
   #focusedId: string | undefined;
   #provider: ServerReadyMessage['agent'] | undefined;
   #history: ServerReadyMessage['history'] | undefined;
-  #zIndex = BASE_Z_INDEX;
+  /** Session ids, least recently focused first, deciding the stacking order. */
+  #stack: string[] = [];
   #visible = false;
 
   constructor(callbacks: ChatWindowCallbacks) {
@@ -78,16 +79,22 @@ export class ChatWindowManager {
   focus(sessionId: string): void {
     const drawer = this.#drawers.get(sessionId);
     if (drawer === undefined) return;
-    if (this.#focusedId === sessionId) {
-      drawer.setFocused(true, this.#zIndex);
-      return;
-    }
     this.#focusedId = sessionId;
-    this.#zIndex += 1;
-    for (const [id, candidate] of this.#drawers) {
-      candidate.setFocused(id === sessionId, id === sessionId ? this.#zIndex : undefined);
-    }
+    this.#stack = [...this.#stack.filter((id) => id !== sessionId), sessionId];
+    this.#applyLayers();
     writeSession(FOCUS_KEY, sessionId);
+  }
+
+  /**
+   * Restacks every window. The focused one takes the top slot and the rest keep
+   * their recency order below it — all still above the selection overlays, so a
+   * chat window is never painted over by the outlines or connectors.
+   */
+  #applyLayers(): void {
+    for (const [id, drawer] of this.#drawers) {
+      const rank = this.#stack.indexOf(id);
+      drawer.setFocused(id === this.#focusedId, chatWindowLayer(id === this.#focusedId, rank));
+    }
   }
 
   /** Opens an additional chat window with its own conversation. */
@@ -118,6 +125,7 @@ export class ChatWindowManager {
     drawer.destroy();
     this.#drawers.delete(sessionId);
     this.#order = this.#order.filter((id) => id !== sessionId);
+    this.#stack = this.#stack.filter((id) => id !== sessionId);
     this.#callbacks.onSessionClose(sessionId);
     this.#persist();
     if (this.#focusedId === sessionId) {
@@ -160,10 +168,10 @@ export class ChatWindowManager {
     this.#drawers.get(sessionId)?.setNotice(message, error);
   }
 
-  setCurrentSelections(contexts: SelectionContext[]): void {
+  setCurrentSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
     // Only the focused window can attach the page selection; the others keep
     // whatever context their own conversation was started with.
-    this.focused()?.setCurrentSelections(contexts);
+    this.focused()?.setCurrentSelections(contexts, elements);
   }
 
   setSelectionAnchor(rect?: Parameters<ChatDrawer['setSelectionAnchor']>[0]): void {
@@ -172,9 +180,9 @@ export class ChatWindowManager {
     }
   }
 
-  openWithSelections(contexts: SelectionContext[]): void {
+  openWithSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
     const drawer = this.focused() ?? this.#drawers.values().next().value;
-    drawer?.openWithSelections(contexts);
+    drawer?.openWithSelections(contexts, elements);
   }
 
   openWithExternalContext(context: AgentExternalContext): void {
@@ -191,6 +199,16 @@ export class ChatWindowManager {
 
   pendingRequestIds(): string[] {
     return [...this.#drawers.values()].flatMap((drawer) => drawer.pendingRequestIds());
+  }
+
+  /** Drops every window's stale page references after a client-side navigation. */
+  handleNavigation(): void {
+    for (const drawer of this.#drawers.values()) drawer.handleNavigation();
+  }
+
+  /** True once the windows have been shown, so navigation can restore them. */
+  get visible(): boolean {
+    return this.#visible;
   }
 
   openAll(focus: boolean, persist: boolean, expand: boolean): void {
@@ -233,9 +251,10 @@ export class ChatWindowManager {
     );
     this.#drawers.set(record.id, drawer);
     this.#order.push(record.id);
+    this.#stack.push(record.id);
     this.element.append(drawer.element);
     drawer.hide(false);
-    drawer.setFocused(false, BASE_Z_INDEX + index);
+    this.#applyLayers();
     return drawer;
   }
 

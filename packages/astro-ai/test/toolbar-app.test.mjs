@@ -93,6 +93,7 @@ function startApp() {
     canvas,
     toggles,
     emit(event, payload) { listeners.get(event)?.(payload); },
+    toggle(state) { listeners.get('toggle')?.({ state }); },
   };
 }
 
@@ -105,8 +106,8 @@ function submit(drawerElement, instruction) {
   );
 }
 
-function installDom() {
-  const dom = new JSDOM('<!doctype html><html><body><main></main></body></html>', { url: 'http://localhost/' });
+function installDom(markup = '<main></main>') {
+  const dom = new JSDOM(`<!doctype html><html><body>${markup}</body></html>`, { url: 'http://localhost/' });
   dom.window.requestAnimationFrame = (callback) => dom.window.setTimeout(() => callback(Date.now()), 0);
   dom.window.cancelAnimationFrame = (id) => dom.window.clearTimeout(id);
   const previous = new Map();
@@ -137,3 +138,62 @@ function installDom() {
     }
   };
 }
+
+test('re-establishes the editor after a client-side navigation', async () => {
+  const cleanup = installDom(
+    '<main><section data-astro-ai-id="hero">Hero</section></main>',
+  );
+  try {
+    const harness = startApp();
+    const { sent, canvas } = harness;
+    harness.emit(SERVER_EVENTS.ready, {
+      protocolVersion: PROTOCOL_VERSION,
+      history: { canUndo: false, canRedo: false },
+      agent: { provider: 'codex', available: true, authenticated: true, message: 'Ready' },
+    });
+    harness.toggle(true);
+    const [drawer] = canvas.querySelectorAll('.ai-chat-drawer');
+    assert.equal(drawer.hidden, false);
+
+    // Attach a selection, then soft-navigate: the body is replaced and the
+    // toolbar is moved into it, exactly as Astro's ClientRouter does.
+    harness.emit(SERVER_EVENTS.ready, {
+      protocolVersion: PROTOCOL_VERSION,
+      history: { canUndo: false, canRedo: false },
+      agent: { provider: 'codex', available: true, authenticated: true, message: 'Ready' },
+    });
+    document.body.innerHTML = '<main><section data-astro-ai-id="cart">Cart</section></main>';
+    document.body.append(canvas);
+    // Astro's app canvas rewrites its own shadow root in connectedCallback, so
+    // reconnecting the toolbar destroys everything the app rendered into it.
+    canvas.replaceChildren();
+    window.history.pushState({}, '', '/cart');
+
+    sent.length = 0;
+    document.dispatchEvent(new window.Event('astro:after-swap'));
+    document.dispatchEvent(new window.Event('astro:page-load'));
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+
+    // The chat window is remounted into the emptied canvas, and it is the same
+    // window: the conversation is not restarted by navigating.
+    const remounted = [...canvas.querySelectorAll('.ai-chat-drawer')];
+    assert.equal(remounted.length, 1);
+    assert.equal(remounted[0], drawer);
+    assert.equal(drawer.hidden, false);
+    assert.equal(
+      document.querySelectorAll('[data-astro-ai-ui="selection-connector"]').length,
+      1,
+      'a navigation must not leak an orphaned connector',
+    );
+    // Insertion zones are re-requested for the page we actually landed on.
+    const zones = sent.filter(([event]) => event === CLIENT_EVENTS.insertionZones);
+    assert.equal(zones.length > 0, true);
+    assert.equal(zones.at(-1)[1].route, '/cart');
+    // No stale attachment survives, so the composer scope is page-level again.
+    assert.equal(drawer.dataset.attachmentState, 'none');
+    assert.equal(drawer.dataset.context, 'page');
+
+    canvas.remove();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  } finally { cleanup(); }
+});

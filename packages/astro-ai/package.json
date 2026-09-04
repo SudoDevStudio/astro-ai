@@ -1,16 +1,28 @@
 {
-  "name": "astro-ai",
+  "name": "@sudodevstudio/astro-ai",
   "version": "0.0.1",
   "description": "Development-only Build with AI tooling for Astro projects.",
   "license": "MIT",
   "author": "Maninderpreet Singh",
+  "homepage": "https://github.com/SudoDevStudio/astro-ai#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SudoDevStudio/astro-ai.git"
+    "url": "git+https://github.com/SudoDevStudio/astro-ai.git",
+    "directory": "packages/astro-ai"
+  },
+  "bugs": {
+    "url": "https://github.com/SudoDevStudio/astro-ai/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
+    "astro-integration",
+    "astro-component",
+    "withastro",
     "astro",
     "visual-editor",
+    "devtools",
     "vite",
     "codex",
     "claude",
@@ -32,7 +44,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

@@ -4,6 +4,7 @@ Development-only visual editing for Astro, with optional Codex or Claude CLI
 support. Source files stay authoritative and all changes render through Vite
 HMR. No editor runtime or metadata is included in production builds.
 
+
 ## Install
 
 ```sh

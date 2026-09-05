@@ -109,6 +109,4 @@ Only set `allowNetworkAgent: true` on a trusted private network.
 
 ## License
 
-MIT © 2026 Maninderpreet Singh. Free to use, modify, and redistribute when the
-copyright and license notice are retained. Provided as-is, without warranty.
-See [LICENSE](./LICENSE).
+MIT

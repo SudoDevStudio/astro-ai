@@ -111,6 +111,17 @@ function installDom(markup = '<main></main>') {
   dom.window.requestAnimationFrame = (callback) => dom.window.setTimeout(() => callback(Date.now()), 0);
   dom.window.cancelAnimationFrame = (id) => dom.window.clearTimeout(id);
   const previous = new Map();
+  // The app keeps its document observers alive for as long as the real toolbar
+  // is mounted, so nothing in the app tears them down at the end of a test.
+  // Track them here and drop their queued records during cleanup, otherwise a
+  // late callback runs against globals this harness has already removed.
+  const observers = new Set();
+  class HarnessMutationObserver extends dom.window.MutationObserver {
+    constructor(callback) {
+      super(callback);
+      observers.add(this);
+    }
+  }
   const globals = {
     window: dom.window,
     document: dom.window.document,
@@ -121,7 +132,7 @@ function installDom(markup = '<main></main>') {
     HTMLSelectElement: dom.window.HTMLSelectElement,
     Node: dom.window.Node,
     DOMRect: dom.window.DOMRect,
-    MutationObserver: dom.window.MutationObserver,
+    MutationObserver: HarnessMutationObserver,
     ResizeObserver: class { observe() {} disconnect() {} },
     requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
@@ -131,6 +142,8 @@ function installDom(markup = '<main></main>') {
     globalThis[key] = value;
   }
   return () => {
+    for (const observer of observers) observer.disconnect();
+    observers.clear();
     dom.window.close();
     for (const [key, value] of previous) {
       if (value === undefined) delete globalThis[key];

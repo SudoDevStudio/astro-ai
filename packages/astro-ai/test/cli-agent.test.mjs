@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -283,6 +284,32 @@ test('rejects every generated change when a locked selection touches another fil
   await fallback.dispose();
 });
 
+/**
+ * Diagnostics shell out to `astro sync`, which loads a platform-specific
+ * rolldown binding. Where that binding is missing the sync exits non-zero
+ * before it can regenerate anything, so the run fails for a reason that has
+ * nothing to do with the behaviour under test. Probe the fixture project once
+ * and report why the toolchain is unusable instead of asserting on it.
+ */
+async function astroSyncFailure(directory) {
+  const result = await new Promise((resolve) => {
+    const child = spawn('npm', ['exec', '--offline', '--', 'astro', 'sync'], {
+      cwd: directory,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    child.on('error', (error) => resolve({ code: null, output: error.message }));
+    child.on('close', (code) => resolve({ code, output }));
+  });
+  // The fixture copy the agent runs against never includes `.astro`, so drop
+  // the probe's output to leave the project exactly as the test built it.
+  await rm(join(directory, '.astro'), { recursive: true, force: true });
+  if (result.code === 0) return undefined;
+  return result.output.trim().split('\n').at(-1) ?? `astro sync exited with ${result.code}`;
+}
+
 test('regenerates Astro env declarations before isolated project diagnostics', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'astro-ai-env-diagnostics-'));
   await mkdir(join(directory, 'src'), { recursive: true });
@@ -310,6 +337,13 @@ test('regenerates Astro env declarations before isolated project diagnostics', a
   await writeFile(join(directory, 'selected.txt'), 'selected:before', 'utf8');
   await writeFile(join(directory, 'outside.txt'), 'outside:before', 'utf8');
   t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const unusable = await astroSyncFailure(directory);
+  if (unusable !== undefined) {
+    t.skip(`astro sync cannot run in this environment: ${unusable}`);
+    return;
+  }
+
   const fallback = new CliAgentFallback({
     provider: 'claude',
     projectRoot: directory,

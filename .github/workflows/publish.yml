@@ -3,13 +3,25 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump to apply before publishing
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dist_tag:
+        description: npm dist-tag to publish under
+        type: choice
+        options: [latest, next]
+        default: latest
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
-  group: npm-publish-${{ github.event.release.tag_name }}
+  group: npm-publish-${{ github.event.release.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -26,7 +38,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      # A release published by hand still has to name the version it ships.
       - name: Verify release tag matches package version
+        if: github.event_name == 'release'
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: >-
@@ -37,16 +51,55 @@ jobs:
             process.exit(1);
           }"
 
+      # A dispatched run picks the version itself, so there is no tag to write
+      # by hand. `npm version` rewrites package.json and package-lock.json
+      # together, which keeps the `npm ci` below in sync.
+      - name: Bump the version
+        if: github.event_name == 'workflow_dispatch'
+        run: npm version ${{ inputs.bump }} --no-git-tag-version
+
+      - name: Resolve the version being published
+        id: release
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
       - run: npm ci --include=optional
       - run: npm run format:check
       - run: npm run check
       - run: npm test
       - run: npm pack --dry-run
 
-      - name: Publish stable release
-        if: ${{ !github.event.release.prerelease }}
-        run: npm publish
+      # Publishing comes before tagging: a failed publish leaves no tag behind
+      # claiming a version that never shipped.
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.dist_tag || (github.event.release.prerelease && 'next' || 'latest') }}
+        run: npm publish --tag "$DIST_TAG"
 
-      - name: Publish prerelease
-        if: ${{ github.event.release.prerelease }}
-        run: npm publish --tag next
+      - name: Tag and push the published version
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/astro-ai/package.json packages/astro-ai/package-lock.json
+          git commit -m "release: $TAG"
+          git tag "$TAG"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "$TAG"
+
+      # Releases created with GITHUB_TOKEN do not start another workflow run,
+      # so this cannot loop back into the `release: published` trigger above.
+      - name: Create the GitHub release
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          PRERELEASE: ${{ inputs.dist_tag == 'next' && '--prerelease' || '' }}
+        run: gh release create "$TAG" --title "$TAG" --generate-notes $PRERELEASE

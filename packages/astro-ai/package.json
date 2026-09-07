@@ -1,6 +1,6 @@
 {
   "name": "@sudodevstudio/astro-ai",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Development-only Build with AI tooling for Astro projects.",
   "license": "MIT",
   "author": "Maninderpreet Singh",

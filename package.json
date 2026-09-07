@@ -7,8 +7,7 @@
   "homepage": "https://github.com/SudoDevStudio/astro-ai#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SudoDevStudio/astro-ai.git",
-    "directory": "packages/astro-ai"
+    "url": "git+https://github.com/SudoDevStudio/astro-ai.git"
   },
   "bugs": {
     "url": "https://github.com/SudoDevStudio/astro-ai/issues"

@@ -80,7 +80,11 @@ test('registers the toolbar and serve-only Vite plugin during dev', () => {
   assert.equal(plugin.apply, 'serve');
   assert.equal(plugin.enforce, 'pre');
   assert.equal(plugin.transform.order, 'pre');
-  assert.ok(configUpdates[0].vite.server.fs.allow.some((path) => path.endsWith('/packages/astro-ai/')));
+  // The integration serves its own toolbar bundle, so the package root has to
+  // be allowed alongside the project root. Derive it rather than matching a
+  // directory name, which changes with the checkout.
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+  assert.ok(configUpdates[0].vite.server.fs.allow.includes(packageRoot));
 });
 
 test('the serve-only Vite plugin instruments native React JSX and TSX nodes', () => {

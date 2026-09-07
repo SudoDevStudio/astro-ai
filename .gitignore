@@ -34,6 +34,9 @@ tmp/
 # Local development playground; publish only the astro-ai package.
 /app/
 
+# Internal implementation brief used during local development.
+info.txt
+
 .claude
 .claude/settings.json
 with-astro

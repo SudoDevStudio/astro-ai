@@ -27,9 +27,6 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/astro-ai
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -81,13 +78,12 @@ jobs:
 
       - name: Tag and push the published version
         if: github.event_name == 'workflow_dispatch'
-        working-directory: .
         env:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packages/astro-ai/package.json packages/astro-ai/package-lock.json
+          git add package.json package-lock.json
           git commit -m "release: $TAG"
           git tag "$TAG"
           git push origin "HEAD:${{ github.ref_name }}"
@@ -97,7 +93,6 @@ jobs:
       # so this cannot loop back into the `release: published` trigger above.
       - name: Create the GitHub release
         if: github.event_name == 'workflow_dispatch'
-        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}

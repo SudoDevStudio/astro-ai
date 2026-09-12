@@ -10,6 +10,7 @@ import { AstroResolver } from '../dist/resolver/astro-resolver.js';
 import {
   ContentSourceRegistry,
   contentEntryReference,
+  describeContentOrigin,
   normalizeContentAttributes,
   normalizeContentSources,
 } from '../dist/shared/content-sources.js';
@@ -109,6 +110,14 @@ test('takes the attribute name from configuration, whatever it is called', () =>
   assert.deepEqual(registry.resolve({ 'data-entry-id': 'abc123' }), []);
 });
 
+test('always names the entry id, with or without an entry URL', () => {
+  const [withUrl] = new ContentSourceRegistry([contentful]).resolve({ 'data-entry-id': 'abc123' });
+  const [withoutUrl] = new ContentSourceRegistry([headless]).resolve({ 'data-legacy-ref': 'legacy-1' });
+
+  assert.match(describeContentOrigin(withUrl), /^contentful: entry abc123 · https:\/\//);
+  assert.match(describeContentOrigin(withoutUrl), /^legacy-cms: entry legacy-1$/);
+});
+
 test('drops attribute values that could be read as prompt instructions', () => {
   const registry = new ContentSourceRegistry([contentful]);
   assert.deepEqual(registry.resolve({ 'data-entry-id': '  ' }), []);
@@ -193,6 +202,93 @@ test('resolves content origins onto a real source selection', async (t) => {
   assert.equal(withEntry.contentOrigins[0].url, 'https://app.contentful.com/spaces/abc/entries/abc123');
 });
 
+test('names every entry field in the Source panel and offers an action per entry', async (t) => {
+  const dom = new JSDOM('<!doctype html><body></body>', { url: 'http://localhost/' });
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    Element: dom.window.Element,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    DOMRect: dom.window.DOMRect,
+    requestAnimationFrame: (callback) => dom.window.setTimeout(() => callback(0), 0),
+    cancelAnimationFrame: (id) => dom.window.clearTimeout(id),
+  };
+  const previous = new Map();
+  for (const [key, value] of Object.entries(globals)) {
+    previous.set(key, globalThis[key]);
+    globalThis[key] = value;
+  }
+  const { ContextualActionBar } = await import('../dist/toolbar/contextual-actions.js');
+  const bar = new ContextualActionBar({ onCommand() {}, onAskAI() {}, onClear() {} });
+  // One hook, because the bar tears down document listeners and so has to go
+  // before the globals it depends on are taken away.
+  t.after(() => {
+    bar.destroy();
+    for (const [key, value] of previous) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  });
+
+  const target = dom.window.document.createElement('div');
+  dom.window.document.body.append(target);
+  bar.show({
+    route: '/catalog/',
+    selectedNode: {
+      nodeId: 'n1',
+      tagName: 'article',
+      source: { file: 'src/pages/catalog.astro', start: { line: 28, column: 5, offset: 0 }, end: { line: 30, column: 1, offset: 9 } },
+    },
+    parentComponents: [],
+    capabilities: {
+      editableText: false,
+      movable: false,
+      reorderable: false,
+      removable: true,
+      editableProps: [],
+      allowedParentSlots: [],
+      sourceKind: 'literal-source',
+      dataProvenance: { kind: 'literal', description: 'Literal template text.', readOnly: false },
+      reorderTargets: {},
+    },
+    contentOrigins: new ContentSourceRegistry([contentful, headless]).resolve({
+      'data-entry-id': 'abc123',
+      'data-legacy-ref': 'legacy-8871',
+    }),
+    relevantFiles: [],
+    skillFiles: [],
+  }, target);
+
+  const root = dom.window.document.querySelector('[data-astro-ai-ui="actions"]').shadowRoot;
+  root.querySelector('[data-action="source"]').click();
+  const rows = [...root.querySelectorAll('.source-detail dl')].map((list) => [
+    list.querySelector('dt').textContent,
+    list.querySelector('dd').textContent,
+  ]);
+
+  // The id is labelled in its own row even though the entry URL contains it,
+  // because the URL carries it encoded and buried in a path.
+  assert.deepEqual(
+    rows.filter(([term]) => term === 'Entry id'),
+    [['Entry id', 'abc123'], ['Entry id', 'legacy-8871']],
+  );
+  assert.deepEqual(
+    rows.filter(([term]) => term === 'Attribute'),
+    [['Attribute', 'data-entry-id'], ['Attribute', 'data-legacy-ref']],
+  );
+  assert.deepEqual(
+    rows.find(([term]) => term === 'Entry URL'),
+    ['Entry URL', 'https://app.contentful.com/spaces/abc/entries/abc123'],
+  );
+
+  // A source with an entry address opens it; one without hands back the id.
+  assert.deepEqual(
+    [...root.querySelectorAll('.source-buttons button')].map((button) => button.textContent),
+    ['Copy path', 'Open in editor', 'Open contentful entry', 'Copy legacy-cms id'],
+  );
+});
+
 test('tells the agent that CMS content is not changed by editing the template', () => {
   const origins = new ContentSourceRegistry([contentful, headless]).resolve({
     'data-entry-id': 'abc123',
@@ -240,7 +336,8 @@ test('carries entry context into the agent prompt for the attached selection', (
     }],
   });
 
-  assert.match(prompt, /Content origin: contentful: https:\/\/app\.contentful\.com\/spaces\/abc\/entries\/abc123/);
+  // The bare id leads, because a URL carries it only encoded inside a path.
+  assert.match(prompt, /Content origin: contentful: entry abc123 · https:\/\/app\.contentful\.com\/spaces\/abc\/entries\/abc123/);
   assert.match(prompt, /Content ownership: the attached selection renders content owned by contentful\./);
   assert.match(prompt, /shorten this headline/);
 });

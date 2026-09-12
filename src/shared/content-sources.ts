@@ -100,9 +100,15 @@ export function contentEntryReference(origin: ContentOrigin): string {
   return origin.url ?? origin.id;
 }
 
+/**
+ * The id comes first and is always present. A configured entry URL contains it
+ * already, but only in encoded form buried in a path, and the id is what you
+ * paste into a CMS search or quote back to whoever owns the entry.
+ */
 export function describeContentOrigin(origin: ContentOrigin): string {
   const detail = [
-    origin.url === undefined ? `id ${origin.id}` : origin.url,
+    `entry ${origin.id}`,
+    origin.url,
     origin.mcp === undefined ? undefined : `MCP server ${origin.mcp}`,
     origin.docs === undefined ? undefined : `docs ${origin.docs}`,
   ].filter((part): part is string => part !== undefined);

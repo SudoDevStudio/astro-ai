@@ -22,6 +22,10 @@ write entries for someone deciding whether to upgrade.
   source.
 - The selection bar shows a chip per resolved entry. Clicking opens the entry,
   or copies the id when the source has no `entryUrl`.
+- The Source panel names each resolved entry's source, id, attribute, and URL
+  in labelled rows, and gains an `Open <source> entry` or `Copy <source> id`
+  action beside `Copy path`. The entry id is always shown, because a configured
+  entry URL contains it only encoded inside a path.
 - `Publish beta to npm` workflow, publishing a `-beta.N` prerelease under the
   `beta` dist-tag from any dispatched ref without tagging or releasing.
 

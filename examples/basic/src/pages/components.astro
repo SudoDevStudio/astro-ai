@@ -1,0 +1,35 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+import StatTile from '../components/StatTile.astro';
+---
+
+<Layout
+	title="Components"
+	lede="Registered components expose typed props the action bar can edit directly."
+>
+	<Callout title="What to try" tone="accent">
+		Select a tile and open Props. `tone` is declared as an enum in
+		`astro.config.mjs`, so it renders as a select rather than a text field.
+	</Callout>
+
+	<section class="tiles" aria-label="Registered component instances">
+		<StatTile label="Open orders" value="128" tone="neutral" />
+		<StatTile label="Late shipments" value="4" tone="warning" />
+		<StatTile label="Uptime" value="99.98%" tone="good" />
+	</section>
+
+	<Callout title="Unregistered props">
+		Only props declared for a component in `visualComponents` are offered for
+		editing. An undeclared prop is left alone, so a component keeps control of
+		its own contract.
+	</Callout>
+</Layout>
+
+<style>
+	.tiles {
+		display: grid;
+		gap: 0.75rem;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	}
+</style>

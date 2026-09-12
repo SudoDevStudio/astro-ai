@@ -320,6 +320,51 @@ function originChip(origin: ContentOrigin): HTMLButtonElement {
   return chip;
 }
 
+/**
+ * Names every field of a resolved entry. The entry id gets its own labelled
+ * row even when an entry URL exists: the URL carries the id only encoded and
+ * buried in a path, while the id is what gets pasted into a CMS search or
+ * quoted to whoever owns the content.
+ */
+function originDetail(origin: ContentOrigin): HTMLElement {
+  const group = element('div', 'origin-detail');
+  const id = element('code', 'entry-id');
+  id.textContent = origin.id;
+  group.append(
+    definition('Content source', origin.source),
+    definitionNode('Entry id', id),
+    definition('Attribute', origin.attribute),
+  );
+  if (origin.url !== undefined) group.append(definition('Entry URL', origin.url));
+  if (origin.mcp !== undefined) group.append(definition('MCP server', origin.mcp));
+  if (origin.docs !== undefined) group.append(definition('Docs', origin.docs));
+  return group;
+}
+
+/**
+ * The Source panel's counterpart to `Open in editor`: the entry is where this
+ * text is actually edited, so acting on it belongs beside the file actions
+ * rather than only on the chip. The source name is in the label because an
+ * element can belong to several entries at once.
+ */
+function entryAction(origin: ContentOrigin): HTMLButtonElement {
+  if (origin.url === undefined) {
+    const copy = button(`Copy ${origin.source} id`, () => {
+      void navigator.clipboard.writeText(origin.id).then(
+        () => { copy.textContent = 'Copied'; },
+        () => { copy.textContent = 'Copy failed'; },
+      );
+    });
+    copy.title = `Copy the ${origin.source} entry id ${origin.id}`;
+    return copy;
+  }
+  const open = button(`Open ${origin.source} entry`, () => {
+    window.open(origin.url, '_blank', 'noopener,noreferrer');
+  });
+  open.title = `Open ${origin.url}`;
+  return open;
+}
+
 function sourceDetail(context: SelectionContext): HTMLElement {
   const detail = element('div', 'detail source-detail');
   const name = context.selectedNode.componentName ?? context.selectedNode.tagName ?? 'Astro node';
@@ -344,7 +389,7 @@ function sourceDetail(context: SelectionContext): HTMLElement {
   }
   detail.append(definition('Provenance', provenance));
   for (const origin of context.contentOrigins ?? []) {
-    detail.append(definition('Content origin', describeContentOrigin(origin)));
+    detail.append(originDetail(origin));
   }
   if (context.capabilities.repeatContext !== undefined) {
     const warning = element('p', 'warning');
@@ -363,6 +408,9 @@ function sourceDetail(context: SelectionContext): HTMLElement {
     void fetch(`/__open-in-editor?file=${encodeURIComponent(file)}`);
   });
   actions.append(copy, open);
+  for (const origin of context.contentOrigins ?? []) {
+    actions.append(entryAction(origin));
+  }
   detail.append(actions);
   return detail;
 }
@@ -390,6 +438,8 @@ function createStyle(): HTMLStyleElement {
     dt { color: #939cab; font-size: 10px; text-transform: uppercase; }
     dd { margin: 0; overflow-wrap: anywhere; }
     .source-path { color: #c4b5fd; }
+    .origin-detail { border-top: 1px solid #262b35; display: grid; gap: 2px; padding-top: 8px; }
+    .entry-id { color: #86efac; }
     .warning { background: #422006; border: 1px solid #854d0e; border-radius: 5px; color: #fde68a; margin: 0; padding: 7px; }
     .muted { color: #aeb6c5; margin: 0; }
   `;

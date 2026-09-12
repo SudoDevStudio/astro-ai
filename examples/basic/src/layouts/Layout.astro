@@ -1,0 +1,114 @@
+---
+import { ClientRouter } from 'astro:transitions';
+
+type Props = {
+	title: string;
+	lede: string;
+};
+
+const { title, lede } = Astro.props;
+const { pathname } = Astro.url;
+
+const pages = [
+	{ href: '/', label: 'Overview' },
+	{ href: '/content/', label: 'Content sources' },
+	{ href: '/components/', label: 'Components' },
+	{ href: '/catalog/', label: 'Catalog' },
+];
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width" />
+		<title>{title} · astro-ai example</title>
+		<!--
+			Client-side navigation is deliberate here. It exercises the path where
+			the editor re-establishes itself against a swapped page: the selection
+			is cleared, insertion zones are re-requested, and chat windows are
+			restored.
+		-->
+		<ClientRouter />
+	</head>
+	<body>
+		<nav aria-label="Example pages">
+			{
+				pages.map(({ href, label }) => (
+					<a href={href} aria-current={pathname === href ? 'page' : undefined}>
+						{label}
+					</a>
+				))
+			}
+		</nav>
+		<main>
+			<header>
+				<h1>{title}</h1>
+				<p class="lede">{lede}</p>
+			</header>
+			<slot />
+		</main>
+	</body>
+</html>
+
+<style>
+	:global(*) {
+		box-sizing: border-box;
+	}
+
+	:global(body) {
+		background: #0d1015;
+		color: #f8fafc;
+		font-family: ui-sans-serif, system-ui, sans-serif;
+		margin: 0;
+	}
+
+	nav {
+		border-bottom: 1px solid #262b35;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		padding: 0.75rem 1.5rem;
+		position: sticky;
+		top: 0;
+		background: #0d1015;
+		z-index: 1;
+	}
+
+	nav a {
+		border-radius: 6px;
+		color: #c4b5fd;
+		padding: 0.35rem 0.7rem;
+		text-decoration: none;
+	}
+
+	nav a:hover {
+		background: #1b2029;
+	}
+
+	nav a[aria-current='page'] {
+		background: #4c1d95;
+		color: #f5f3ff;
+	}
+
+	main {
+		display: grid;
+		gap: 1.5rem;
+		margin: 0 auto;
+		max-width: 760px;
+		padding: 2.5rem 1.5rem 5rem;
+	}
+
+	header {
+		display: grid;
+		gap: 0.4rem;
+	}
+
+	h1 {
+		margin: 0;
+	}
+
+	.lede {
+		color: #aeb6c5;
+		margin: 0;
+	}
+</style>

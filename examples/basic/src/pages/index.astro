@@ -1,0 +1,48 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+
+const tagline = 'This sentence lives in a local variable, not in the markup.';
+const features = ['Select', 'Edit', 'Reorder'];
+---
+
+<Layout
+	title="Edit this heading"
+	lede="Open the dev toolbar, choose the star app, then click anything on this page."
+>
+	<p>{tagline}</p>
+
+	<Callout title="Start here" tone="accent">
+		Click selects. Shift-click adds to the selection, dragging draws a marquee,
+		and right-clicking opens the action bar straight away.
+	</Callout>
+
+	<section class="panel" aria-label="Reordering demonstration">
+		<p>First sibling</p>
+		<p>Second sibling</p>
+		<p>Third sibling</p>
+	</section>
+
+	<ul>
+		{features.map((feature) => <li>{feature}</li>)}
+	</ul>
+
+	<Callout title="Repeated templates">
+		The list above is rendered from an array, so all three items share one
+		source node. Editing one edits every instance, and the action bar says so.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px dashed #3f4552;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.5rem;
+		padding: 1rem 1.25rem;
+	}
+
+	.panel p {
+		margin: 0;
+	}
+</style>

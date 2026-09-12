@@ -176,6 +176,17 @@ chat history. Up to five attachments are supported. Text files are limited to
 For safety, the agent bridge is disabled when Astro listens beyond loopback.
 Only set `allowNetworkAgent: true` on a trusted private network.
 
+## Example
+
+[`examples/basic`](examples/basic) is a small Astro app wired to this
+repository rather than to npm, covering selection, editing, reordering, a
+registered visual component, and content sources.
+
+```sh
+npm install
+cd examples/basic && npm install && npm run dev
+```
+
 ## Demo
 
 https://github.com/user-attachments/assets/b92406dc-c632-496e-9582-7017bea1fa9c

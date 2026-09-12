@@ -38,7 +38,11 @@ export default defineToolbarApp({
           ...(attachments === undefined
             ? {}
             : {
-                attachments: attachments.map(({ nodeId, route }) => ({ nodeId, route })),
+                attachments: attachments.map(({ nodeId, route, contentAttributes }) => ({
+                  nodeId,
+                  route,
+                  ...(contentAttributes === undefined ? {} : { contentAttributes }),
+                })),
               }),
           ...(locked === true ? { locked: true } : {}),
           ...(files === undefined ? {} : { files }),
@@ -77,7 +81,7 @@ export default defineToolbarApp({
     });
 
     overlay = new SelectionOverlay({
-      onInspect(nodeId) {
+      onInspect(nodeId, contentAttributes) {
         const requestId = createRequestId();
         pendingInspectRequests.set(requestId, nodeId);
         windows.broadcastNotice('Resolving source capabilities…');
@@ -85,6 +89,7 @@ export default defineToolbarApp({
           requestId,
           nodeId,
           route: window.location.pathname,
+          ...(contentAttributes === undefined ? {} : { contentAttributes }),
         });
       },
       onActiveChange() {},
@@ -150,8 +155,9 @@ export default defineToolbarApp({
       restoringOpenState = false;
     });
 
-    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent }) => {
+    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes }) => {
       if (disposed || protocolVersion !== PROTOCOL_VERSION) return;
+      overlay.setContentAttributes(contentAttributes ?? []);
       windows.setProvider(agent);
       windows.setHistory(history);
       requestInsertionZones();

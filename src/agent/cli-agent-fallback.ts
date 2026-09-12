@@ -20,6 +20,11 @@ import {
   type AgentProgressState,
   type AgentProviderStatus,
 } from "./agent-fallback.js";
+import {
+  contentEntryReference,
+  describeContentOrigin,
+  type ContentOrigin,
+} from "../shared/content-sources.js";
 import { DEFAULT_SESSION_ID } from "../shared/protocol.js";
 import type { PatchTransactionStore } from "../visual/patch-transactions.js";
 
@@ -1046,6 +1051,42 @@ function diffSnapshots(
   });
 }
 
+/**
+ * Tells the agent that the words it was asked to change are fetched data, and
+ * where the entry that owns them actually lives. Without this the agent edits
+ * the template, the page looks right until the next fetch, and the real entry
+ * is never touched.
+ */
+export function buildContentPolicy(origins: ContentOrigin[]): string {
+  if (origins.length === 0) return "";
+  const unique = new Map<string, ContentOrigin>();
+  for (const origin of origins) unique.set(`${origin.source}:${origin.id}`, origin);
+  const entries = [...unique.values()];
+  const sourceNames = [...new Set(entries.map(({ source }) => source))];
+  const mcpServers = [...new Set(entries.flatMap(({ mcp }) => (mcp === undefined ? [] : [mcp])))];
+  const docs = [...new Set(entries.flatMap(({ docs: url }) => (url === undefined ? [] : [url])))];
+  const instructions = [...new Set(entries.flatMap(
+    ({ instructions: text }) => (text === undefined ? [] : [text]),
+  ))];
+  return [
+    "",
+    `Content ownership: the attached selection renders content owned by ${sourceNames.join(" and ")}.`,
+    "Its text and media are fetched at request time, so editing the template does not change the words, and pasting them into source hardcodes content that the next fetch contradicts.",
+    "Entries behind this selection:",
+    ...entries.map(
+      (origin) => `- ${origin.source} entry ${origin.id} (read from ${origin.attribute}): ${contentEntryReference(origin)}`,
+    ),
+    mcpServers.length === 0
+      ? "No content MCP server is configured, so you cannot change these entries yourself."
+      : `Use the ${mcpServers.join(" and ")} MCP server${mcpServers.length === 1 ? "" : "s"} already connected to this CLI to read or update these entries.`,
+    ...(docs.length === 0 ? [] : [`Consult ${docs.join(", ")} before proposing a content change.`]),
+    ...instructions,
+    "Change the entry in its own system, or change what the template does with the field — its structure, styling, formatting, or which field it reads. Do not replace a rendered field with a literal.",
+    "If you cannot reach the entry, make the source-side change that was asked for and tell the user which entry to edit and where.",
+    "",
+  ].join("\n");
+}
+
 export function buildPrompt(
   request: AgentFallbackRequest,
   history: ConversationTurn[] = [],
@@ -1073,6 +1114,9 @@ export function buildPrompt(
                 `Source: ${selection.selectedNode.source.file}:${selection.selectedNode.source.start.line}:${selection.selectedNode.source.start.column}`,
                 `Source kind: ${selection.capabilities.sourceKind}`,
                 `Provenance: ${selection.capabilities.dataProvenance.description}`,
+                ...(selection.contentOrigins ?? []).map(
+                  (origin) => `Content origin: ${describeContentOrigin(origin)}`,
+                ),
                 selection.capabilities.repeatContext?.description,
                 selection.relevantFiles.length === 0
                   ? undefined
@@ -1082,6 +1126,9 @@ export function buildPrompt(
                 .join("\n"),
             )
             .join("\n\n");
+  const contentPolicy = buildContentPolicy(selections.flatMap(
+    (selection) => selection.contentOrigins ?? [],
+  ));
   const renderedTurns = history
     .map((turn) =>
       [
@@ -1145,6 +1192,7 @@ export function buildPrompt(
     skillContext,
     priorTurns,
     context,
+    contentPolicy,
     fileContext,
     "",
     modeInstruction,

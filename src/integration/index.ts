@@ -12,6 +12,11 @@ import {
   type CliAgentProvider,
 } from '../agent/cli-agent-fallback.js';
 import { AstroResolver } from '../resolver/astro-resolver.js';
+import {
+  ContentSourceRegistry,
+  normalizeContentAttributes,
+  type ContentSourceDefinition,
+} from '../shared/content-sources.js';
 import type { VisualComponentDefinition } from '../shared/visual-components.js';
 import {
   CLIENT_EVENTS,
@@ -60,6 +65,8 @@ export type BuildWithAIOptions = {
   /** Required to expose the credentialed agent bridge when Astro is bound beyond loopback. */
   allowNetworkAgent?: boolean;
   visualComponents?: VisualComponentDefinition[];
+  /** CMS and other external systems that own rendered content, keyed by a DOM attribute. */
+  contentSources?: ContentSourceDefinition[];
 };
 
 export { BUILD_AI_VITE_PLUGIN_NAME, buildAIVitePlugin } from '../vite/build-ai-plugin.js';
@@ -71,6 +78,15 @@ export type {
   SelectionContext,
   VisualCapabilities,
 } from '../shared/selection-context.js';
+export {
+  contentEntryReference,
+  describeContentOrigin,
+  normalizeContentSources,
+} from '../shared/content-sources.js';
+export type {
+  ContentOrigin,
+  ContentSourceDefinition,
+} from '../shared/content-sources.js';
 export type { VisualComponentDefinition } from '../shared/visual-components.js';
 
 export function agentSelectionReferences(
@@ -154,10 +170,21 @@ export default function buildWithAI(
       'astro:config:setup': ({ config, command, addDevToolbarApp, updateConfig, logger }) => {
         if (command !== 'dev') return;
 
+        let contentSources = new ContentSourceRegistry();
+        try {
+          contentSources = new ContentSourceRegistry(options.contentSources);
+        } catch (error) {
+          // Content origins enrich context rather than carry it, so a bad
+          // declaration is reported and skipped instead of stopping dev.
+          const detail = error instanceof Error ? error.message : 'Invalid content source configuration.';
+          logger.error(`[astro-ai] ${detail} Content sources are disabled.`);
+        }
+
         resolver = new AstroResolver(
           fileURLToPath(config.root),
           new VisualCapabilityResolver(options.visualComponents),
           options.skills ?? [],
+          contentSources,
         );
         engine = new VisualCommandEngine(
           resolver,
@@ -266,9 +293,11 @@ export default function buildWithAI(
 
           logger.debug(`Toolbar connected for route ${message.route}.`);
           await activeEngine.transactions.ready();
+          const contentAttributes = activeResolver.contentSources.attributes;
           toolbar.send<ServerReadyMessage>(SERVER_EVENTS.ready, {
             protocolVersion: PROTOCOL_VERSION,
             history: activeEngine.transactions.state(),
+            ...(contentAttributes.length === 0 ? {} : { contentAttributes }),
             agent: await activeAgent.status(),
           });
           for (const requestId of message.pendingAgentRequestIds ?? []) {
@@ -285,7 +314,14 @@ export default function buildWithAI(
           try {
             toolbar.send(SERVER_EVENTS.selection, {
               requestId: message.requestId,
-              context: activeResolver.resolveSelection(message.nodeId, message.route),
+              context: activeResolver.resolveSelection(
+                message.nodeId,
+                message.route,
+                normalizeContentAttributes(
+                  message.contentAttributes,
+                  activeResolver.contentSources.attributes,
+                ),
+              ),
             });
           } catch (error) {
             sendError(toolbar, logger, error, message.requestId, false);
@@ -345,8 +381,12 @@ export default function buildWithAI(
           try {
             const references = agentSelectionReferences(message);
             const files = normalizeAgentFileAttachments(message.files);
-            const selections = references.map(({ nodeId, route }) => (
-              activeResolver.resolveSelection(nodeId, route)
+            const selections = references.map(({ nodeId, route, contentAttributes }) => (
+              activeResolver.resolveSelection(
+                nodeId,
+                route,
+                normalizeContentAttributes(contentAttributes, activeResolver.contentSources.attributes),
+              )
             ));
             if (message.locked === true && selections.length === 0) {
               throw new Error('A locked AI edit scope requires at least one resolved source selection.');

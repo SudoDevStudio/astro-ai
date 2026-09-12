@@ -20,7 +20,7 @@ type SelectedItem = {
 type MarqueeOrigin = AnchorPoint & { additive: boolean };
 
 export type SelectionOverlayCallbacks = {
-  onInspect(nodeId: string): void;
+  onInspect(nodeId: string, contentAttributes?: Record<string, string>): void;
   onActiveChange(active: boolean): void;
   onCommand(command: DeterministicVisualCommand): void;
   onAskAI(contexts: SelectionContext[], elements: HTMLElement[]): void;
@@ -50,6 +50,7 @@ export class SelectionOverlay {
   #marqueeActive = false;
   #suppressClick = false;
   #viewportFrame: number | undefined;
+  #contentAttributes: string[] = [];
   readonly #tabIndexes = new Map<HTMLElement, string | null>();
 
   constructor(callbacks: SelectionOverlayCallbacks) {
@@ -67,6 +68,15 @@ export class SelectionOverlay {
 
   get active(): boolean {
     return this.#active;
+  }
+
+  /**
+   * Content source attributes the server declared. Entry ids exist only in the
+   * rendered page, so the server can name the attributes but only the browser
+   * can read what is in them.
+   */
+  setContentAttributes(attributes: readonly string[]): void {
+    this.#contentAttributes = [...attributes];
   }
 
   /**
@@ -389,7 +399,7 @@ export class SelectionOverlay {
         item.element = relocated;
         this.#updateItem(item);
         this.#pending.set(nodeId, { element: relocated, mode: 'refresh' });
-        this.#callbacks.onInspect(nodeId);
+        this.#callbacks.onInspect(nodeId, collectContentAttributes(relocated, this.#contentAttributes));
       }
       this.#syncSelection();
     }, 60);
@@ -398,7 +408,7 @@ export class SelectionOverlay {
   #inspect(element: HTMLElement, nodeId: string, mode: SelectionMode, point?: AnchorPoint): void {
     if (mode === 'replace') this.#pending.clear();
     this.#pending.set(nodeId, { element, mode, ...(point === undefined ? {} : { point }) });
-    this.#callbacks.onInspect(nodeId);
+    this.#callbacks.onInspect(nodeId, collectContentAttributes(element, this.#contentAttributes));
   }
 
   #syncSelection(renderActions = true): void {
@@ -612,6 +622,30 @@ function marqueeCandidates(selectionRect: DOMRect): HTMLElement[] {
     if (unique.size >= MAX_MARQUEE_SELECTION) break;
   }
   return [...unique.values()];
+}
+
+/**
+ * Reads configured content source attributes off an element, falling back to
+ * its nearest ancestor that carries one. A CMS client usually marks the entry
+ * on the wrapper it renders, not on the heading inside it.
+ */
+export function collectContentAttributes(
+  element: Element,
+  attributes: readonly string[],
+): Record<string, string> | undefined {
+  const collected: Record<string, string> = {};
+  for (const attribute of attributes) {
+    let owner: Element | null = null;
+    try {
+      owner = element.closest(`[${attribute}]`);
+    } catch {
+      // An attribute name that cannot form a selector simply never resolves.
+      continue;
+    }
+    const value = owner?.getAttribute(attribute)?.trim();
+    if (value !== undefined && value !== '') collected[attribute] = value;
+  }
+  return Object.keys(collected).length === 0 ? undefined : collected;
 }
 
 function findSourceElement(target: EventTarget | null): HTMLElement | undefined {

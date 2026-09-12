@@ -1,3 +1,5 @@
+import type { ContentOrigin } from './content-sources.js';
+
 export type SourcePosition = {
   line: number;
   column: number;
@@ -77,6 +79,12 @@ export type SelectionContext = {
     source?: SourceLocation;
   }>;
   capabilities: VisualCapabilities;
+  /**
+   * CMS entries this element belongs to, resolved from configured content
+   * source attributes on the element or its nearest ancestor. Empty when no
+   * content source is configured or none of their attributes are present.
+   */
+  contentOrigins: ContentOrigin[];
   relevantFiles: string[];
   skillFiles: string[];
 };

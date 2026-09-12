@@ -1,3 +1,4 @@
+import { describeContentOrigin, type ContentOrigin } from '../shared/content-sources.js';
 import type { SelectionContext } from '../shared/selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import { EDITOR_LAYERS } from './layers.js';
@@ -135,6 +136,9 @@ export class ContextualActionBar {
         control.setAttribute('aria-pressed', String(this.#activeDetail === action.id));
         row.append(control);
       }
+    }
+    for (const origin of this.#context?.contentOrigins ?? []) {
+      row.append(originChip(origin));
     }
     const close = button('×', this.#callbacks.onClear);
     close.className = 'close';
@@ -291,6 +295,31 @@ export class ContextualActionBar {
   };
 }
 
+/**
+ * Surfaces the entry behind the selection, because the fastest fix for CMS
+ * content is usually opening the entry rather than asking the agent at all.
+ * With no configured entry URL the id itself is the only useful handle, so the
+ * chip copies it.
+ */
+function originChip(origin: ContentOrigin): HTMLButtonElement {
+  const label = origin.id.length > 12 ? `${origin.id.slice(0, 11)}…` : origin.id;
+  const chip = button(`${origin.source} · ${label}`, () => {
+    if (origin.url !== undefined) {
+      window.open(origin.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    void navigator.clipboard.writeText(origin.id).then(
+      () => { chip.textContent = 'Entry id copied'; },
+      () => { chip.textContent = 'Copy failed'; },
+    );
+  });
+  chip.className = 'origin-chip';
+  chip.title = origin.url === undefined
+    ? `${describeContentOrigin(origin)} · click to copy the entry id`
+    : `${describeContentOrigin(origin)} · click to open the entry`;
+  return chip;
+}
+
 function sourceDetail(context: SelectionContext): HTMLElement {
   const detail = element('div', 'detail source-detail');
   const name = context.selectedNode.componentName ?? context.selectedNode.tagName ?? 'Astro node';
@@ -314,6 +343,9 @@ function sourceDetail(context: SelectionContext): HTMLElement {
     provenance += ` Declaration: ${declaredAt.file}:${declaredAt.start.line}:${declaredAt.start.column}.`;
   }
   detail.append(definition('Provenance', provenance));
+  for (const origin of context.contentOrigins ?? []) {
+    detail.append(definition('Content origin', describeContentOrigin(origin)));
+  }
   if (context.capabilities.repeatContext !== undefined) {
     const warning = element('p', 'warning');
     warning.textContent = 'Repeated template: this source edit affects every rendered instance.';
@@ -347,6 +379,8 @@ function createStyle(): HTMLStyleElement {
     button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
     button:disabled { cursor: not-allowed; opacity: .4; }
     .close { margin-left: auto; }
+    .origin-chip { background: #0f2a22; border-color: #14805e; color: #86efac; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .origin-chip:hover { background: #14532d; border-color: #22c55e; }
     .detail { border-top: 1px solid #343a46; display: grid; gap: 8px; margin-top: 6px; max-height: min(360px, calc(100vh - 80px)); overflow: auto; padding: 10px 6px 5px; }
     label { display: grid; gap: 4px; }
     input, select { background: #0d1015; border: 1px solid #444b59; border-radius: 5px; box-sizing: border-box; color: white; min-width: 0; padding: 7px; }

@@ -1060,26 +1060,40 @@ function diffSnapshots(
 export function buildContentPolicy(origins: ContentOrigin[]): string {
   if (origins.length === 0) return "";
   const unique = new Map<string, ContentOrigin>();
-  for (const origin of origins) unique.set(`${origin.source}:${origin.id}`, origin);
+  for (const origin of origins)
+    unique.set(`${origin.source}:${origin.id}`, origin);
   const entries = [...unique.values()];
   const sourceNames = [...new Set(entries.map(({ source }) => source))];
-  const mcpServers = [...new Set(entries.flatMap(({ mcp }) => (mcp === undefined ? [] : [mcp])))];
-  const docs = [...new Set(entries.flatMap(({ docs: url }) => (url === undefined ? [] : [url])))];
-  const instructions = [...new Set(entries.flatMap(
-    ({ instructions: text }) => (text === undefined ? [] : [text]),
-  ))];
+  const mcpServers = [
+    ...new Set(entries.flatMap(({ mcp }) => (mcp === undefined ? [] : [mcp]))),
+  ];
+  const docs = [
+    ...new Set(
+      entries.flatMap(({ docs: url }) => (url === undefined ? [] : [url])),
+    ),
+  ];
+  const instructions = [
+    ...new Set(
+      entries.flatMap(({ instructions: text }) =>
+        text === undefined ? [] : [text],
+      ),
+    ),
+  ];
   return [
     "",
     `Content ownership: the attached selection renders content owned by ${sourceNames.join(" and ")}.`,
     "Its text and media are fetched at request time, so editing the template does not change the words, and pasting them into source hardcodes content that the next fetch contradicts.",
     "Entries behind this selection:",
     ...entries.map(
-      (origin) => `- ${origin.source} entry ${origin.id} (read from ${origin.attribute}): ${contentEntryReference(origin)}`,
+      (origin) =>
+        `- ${origin.source} entry ${origin.id} (read from ${origin.attribute}): ${contentEntryReference(origin)}`,
     ),
     mcpServers.length === 0
       ? "No content MCP server is configured, so you cannot change these entries yourself."
       : `Use the ${mcpServers.join(" and ")} MCP server${mcpServers.length === 1 ? "" : "s"} already connected to this CLI to read or update these entries.`,
-    ...(docs.length === 0 ? [] : [`Consult ${docs.join(", ")} before proposing a content change.`]),
+    ...(docs.length === 0
+      ? []
+      : [`Consult ${docs.join(", ")} before proposing a content change.`]),
     ...instructions,
     "Change the entry in its own system, or change what the template does with the field — its structure, styling, formatting, or which field it reads. Do not replace a rendered field with a literal.",
     "If you cannot reach the entry, make the source-side change that was asked for and tell the user which entry to edit and where.",
@@ -1115,7 +1129,8 @@ export function buildPrompt(
                 `Source kind: ${selection.capabilities.sourceKind}`,
                 `Provenance: ${selection.capabilities.dataProvenance.description}`,
                 ...(selection.contentOrigins ?? []).map(
-                  (origin) => `Content origin: ${describeContentOrigin(origin)}`,
+                  (origin) =>
+                    `Content origin: ${describeContentOrigin(origin)}`,
                 ),
                 selection.capabilities.repeatContext?.description,
                 selection.relevantFiles.length === 0
@@ -1126,9 +1141,9 @@ export function buildPrompt(
                 .join("\n"),
             )
             .join("\n\n");
-  const contentPolicy = buildContentPolicy(selections.flatMap(
-    (selection) => selection.contentOrigins ?? [],
-  ));
+  const contentPolicy = buildContentPolicy(
+    selections.flatMap((selection) => selection.contentOrigins ?? []),
+  );
   const renderedTurns = history
     .map((turn) =>
       [

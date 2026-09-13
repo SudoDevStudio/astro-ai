@@ -1,0 +1,44 @@
+---
+import Card from '../components/Card.svelte';
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width" />
+		<title>Svelte island · astro-ai</title>
+	</head>
+	<body>
+		<main>
+			<h1>Edit this Astro heading</h1>
+			<p>
+				The heading above lives in the Astro page. The card below is a
+				Svelte island, hydrated with <code>client:load</code>.
+			</p>
+			<p class="warning">
+				The Astro page around this island is fully editable. The island itself
+				is not indexed yet.
+			</p>
+
+			<Card client:load />
+		</main>
+	</body>
+</html>
+
+<style>
+	:global(body) {
+		background: #0d1015;
+		color: #f8fafc;
+		font-family: ui-sans-serif, system-ui, sans-serif;
+		margin: 0;
+	}
+	main {
+		display: grid;
+		gap: 1.25rem;
+		margin: 0 auto;
+		max-width: 640px;
+		padding: 4rem 1.5rem;
+	}
+	h1 { margin: 0; }
+	code { color: #c4b5fd; }
+</style>

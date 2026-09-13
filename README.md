@@ -92,6 +92,9 @@ The isolated agent workspace honors `.gitignore` and the additional
 `excludeDirectories`. `skills` are project-relative convention files included
 with agent context.
 
+Every option, with defaults and worked examples, is in
+[CONFIGURATION.md](CONFIGURATION.md).
+
 Toolbar history is stored in the browser tab's `sessionStorage`; it is not
 mirrored into Codex or Claude chat applications. Credentials remain in the CLI
 credential store and are never sent to browser code.

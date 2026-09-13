@@ -41,6 +41,8 @@ codex login
 ## Features
 
 - Select and inspect source-backed Astro, JSX, and TSX elements.
+- Works with native Astro templates and React, Preact, and Solid islands.
+  Vue and Svelte single-file components are not supported yet.
 - **Click** a selected element to drive the running app while selection mode
   stays on — open a menu or switch a tab, then edit what it reveals.
 - Edit literal text and props without using AI.

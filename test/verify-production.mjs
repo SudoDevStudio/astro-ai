@@ -3,7 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
-const appRoot = fileURLToPath(new URL('../../../app/', import.meta.url));
+const appRoot = fileURLToPath(new URL('../app/', import.meta.url));
 await run('npm', ['run', 'build'], appRoot);
 const files = await collect(join(appRoot, 'dist'));
 const forbidden = /data-astro-ai|astro-ai:|build with ai|agent workspace/i;

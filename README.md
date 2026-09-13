@@ -41,6 +41,8 @@ codex login
 ## Features
 
 - Select and inspect source-backed Astro, JSX, and TSX elements.
+- Works with native Astro templates and React, Preact, and Solid islands.
+  Vue and Svelte single-file components are not supported yet.
 - **Click** a selected element to drive the running app while selection mode
   stays on — open a menu or switch a tab, then edit what it reveals.
 - Edit literal text and props without using AI.
@@ -179,16 +181,19 @@ chat history. Up to five attachments are supported. Text files are limited to
 For safety, the agent bridge is disabled when Astro listens beyond loopback.
 Only set `allowNetworkAgent: true` on a trusted private network.
 
-## Example
+## Examples
 
-[`examples/basic`](examples/basic) is a small Astro app wired to this
-repository rather than to npm, covering selection, editing, reordering, a
-registered visual component, and content sources.
+[`examples/`](examples) holds six Astro apps wired to this repository rather
+than to npm. [`basic`](examples/basic) is the broadest tour, and there is one
+app per framework island: React, Preact, Solid, Vue, and Svelte.
 
 ```sh
 npm install
 cd examples/basic && npm install && npm run dev
 ```
+
+See the [examples index](examples/README.md) for what each one covers and which
+frameworks the editor indexes.
 
 ## Demo
 

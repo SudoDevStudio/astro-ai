@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { AstroResolver } from '../dist/resolver/astro-resolver.js';
 import { VisualCommandEngine } from '../dist/visual/command-engine.js';
 
-const appRoot = fileURLToPath(new URL('../../../app/', import.meta.url));
-const pageFile = fileURLToPath(new URL('../../../app/src/pages/playground.astro', import.meta.url));
+const appRoot = fileURLToPath(new URL('../app/', import.meta.url));
+const pageFile = fileURLToPath(new URL('../app/src/pages/playground.astro', import.meta.url));
 const originalHeading = 'Edit this literal heading';
 const changedHeading = 'HMR verified deterministic heading';
 const devServerUrl = new URL(

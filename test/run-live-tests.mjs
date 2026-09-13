@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const appRoot = fileURLToPath(new URL('../../../app/', import.meta.url));
+const appRoot = fileURLToPath(new URL('../app/', import.meta.url));
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 const url = 'http://127.0.0.1:4337/';
 const server = spawn('npm', ['run', 'dev', '--', '--host', '127.0.0.1', '--port', '4337', '--ignore-lock'], {

@@ -242,15 +242,26 @@ export class AstroResolver {
           : state.parentComponents;
         const childGroupId = `${nodeId}:children`;
         const children = Array.isArray(value.children) ? value.children : [];
+        // Solid renders lists through `<For each>` / `<Index each>` rather than
+        // `.map()`, so the repeat has to be recognised on the element itself.
+        const repeatComponent = repeatComponentName(value);
+        const childRepeat = repeatComponent === undefined
+          ? state.repeatContext
+          : {
+              kind: 'map' as const,
+              description: `Rendered by a <${repeatComponent} each> template; edits affect every rendered instance.`,
+              source: location,
+              affectsAllInstances: true as const,
+            };
 
         for (const child of children) {
           walk(child, {
             parentNodeId: nodeId,
             parentComponents: nextParents,
             structuralPath,
-            ...(state.repeatContext === undefined
+            ...(childRepeat === undefined
               ? {}
-              : { repeatContext: state.repeatContext }),
+              : { repeatContext: childRepeat }),
             ...(child?.type === 'JSXElement'
               ? { siblingGroupId: childGroupId }
               : {}),
@@ -550,8 +561,8 @@ function analyzeContent(
         kind: 'literal',
         description:
           repeatContext === undefined
-            ? `Literal text in this ${sourceLanguage === 'astro' ? 'Astro' : 'React'} template.`
-            : `Literal text in a repeated ${sourceLanguage === 'astro' ? 'Astro' : 'React'} template.`,
+            ? `Literal text in this ${sourceLanguage === 'astro' ? 'Astro' : 'JSX'} template.`
+            : `Literal text in a repeated ${sourceLanguage === 'astro' ? 'Astro' : 'JSX'} template.`,
         readOnly: false,
       },
     };
@@ -926,6 +937,28 @@ function isMapCall(node: AstNode): boolean {
     node.callee.property?.type === 'Identifier' &&
     node.callee.property.name === 'map'
   );
+}
+
+/**
+ * Solid renders lists through `<For each={…}>` and `<Index each={…}>` rather
+ * than `.map()`. Without this, every item in a Solid list reads as a one-off
+ * node, so an edit that actually rewrites every rendered row would be offered
+ * with no warning that it does.
+ */
+const REPEAT_COMPONENTS = new Set(['For', 'Index']);
+
+function repeatComponentName(node: AstNode): string | undefined {
+  if (node.type !== 'JSXElement') return undefined;
+  const name = node.openingElement?.name;
+  if (name?.type !== 'JSXIdentifier' || typeof name.name !== 'string') return undefined;
+  if (!REPEAT_COMPONENTS.has(name.name)) return undefined;
+  const hasEach = (node.openingElement?.attributes ?? []).some(
+    (attribute: AstNode) =>
+      attribute?.type === 'JSXAttribute' &&
+      attribute.name?.type === 'JSXIdentifier' &&
+      attribute.name.name === 'each',
+  );
+  return hasEach ? name.name : undefined;
 }
 
 function hasHydrationDirective(attributes: unknown): boolean {

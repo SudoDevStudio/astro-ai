@@ -1198,7 +1198,7 @@ export function buildPrompt(
         ].join("\n");
   return [
     "You are the code-generation fallback for a development-only, source-aware Astro visual editor.",
-    "The editor supports native Astro templates and React JSX/TSX islands.",
+    "The editor supports native Astro templates and JSX/TSX islands (React, Preact, and Solid).",
     "",
     "Work only inside the current isolated project workspace. Inspect the existing source and implement the requested change directly in the files.",
     "Make the smallest coherent change, preserve existing conventions, and do not install dependencies.",

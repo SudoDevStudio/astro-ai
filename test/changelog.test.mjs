@@ -37,16 +37,22 @@ test('extracts one release section and stops at the next heading', () => {
   assert.equal(changelogSection(sample, 'unreleased'), '### Added\n\n- A pending change.');
 });
 
-test('keeps a section for the version being published', async () => {
-  const [markdown, pkg] = await Promise.all([
-    readFile(CHANGELOG, 'utf8'),
-    readFile(new URL('../package.json', import.meta.url), 'utf8'),
-  ]);
-  const { version } = JSON.parse(pkg);
-  // A release body is taken from this file, so every published version needs
-  // its own section. A prerelease ships whatever is still under Unreleased.
-  const wanted = version.includes('-') ? 'Unreleased' : version;
-  const section = changelogSection(markdown, wanted);
-  assert.notEqual(section, undefined, `CHANGELOG.md has no section for ${wanted}.`);
-  assert.notEqual(section, '');
+test('keeps the real changelog promotable and free of hollow sections', async () => {
+  const markdown = await readFile(CHANGELOG, 'utf8');
+
+  // Promotion rewrites this heading into the released version, so losing it
+  // would silently turn every future release into generated notes. It is
+  // allowed to be empty: a release with nothing to say falls back on purpose.
+  assert.notEqual(
+    changelogSection(markdown, 'Unreleased'),
+    undefined,
+    'CHANGELOG.md has lost its Unreleased heading.',
+  );
+
+  // A released section with no body would publish an empty release note.
+  const versions = [...markdown.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map(([, version]) => version);
+  assert.ok(versions.length > 0, 'CHANGELOG.md lists no released versions.');
+  for (const version of versions) {
+    assert.notEqual(changelogSection(markdown, version), '', `CHANGELOG.md has an empty ${version} section.`);
+  }
 });

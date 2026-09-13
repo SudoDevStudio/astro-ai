@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { AstroResolver } from '../dist/resolver/astro-resolver.js';
 import { VisualCommandEngine } from '../dist/visual/command-engine.js';
 
-const appRoot = fileURLToPath(new URL('../../../app/', import.meta.url));
+const appRoot = fileURLToPath(new URL('../app/', import.meta.url));
 const componentFile = fileURLToPath(
-  new URL('../../../app/src/components/ReactVisualFixture.tsx', import.meta.url),
+  new URL('../app/src/components/ReactVisualFixture.tsx', import.meta.url),
 );
 const serverUrl = new URL(process.env.ASTRO_AI_SMOKE_URL ?? 'http://localhost:4321/');
 const socketUrl = new URL(serverUrl);

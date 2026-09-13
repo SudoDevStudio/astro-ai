@@ -1,3 +1,4 @@
+import type { ContentOrigin } from '../shared/content-sources.js';
 import type { SelectionContext } from '../shared/selection-context.js';
 
 export type ContextualActionId = 'click' | 'edit' | 'props' | 'move' | 'remove' | 'ask-ai' | 'source';
@@ -16,6 +17,12 @@ export type SelectionAttachment = {
   provenance: SelectionContext['capabilities']['dataProvenance'];
   repeatContext?: SelectionContext['capabilities']['repeatContext'];
   parentComponents: SelectionContext['parentComponents'];
+  contentOrigins?: ContentOrigin[];
+  /**
+   * Sent back with the request so the server rebuilds entry references from
+   * its own configuration. A run must not carry a URL the page composed.
+   */
+  contentAttributes?: Record<string, string>;
 };
 
 export function contextualActions(context: SelectionContext): ContextualAction[] {
@@ -45,6 +52,13 @@ export function createSelectionAttachment(context: SelectionContext): SelectionA
   };
   if (context.capabilities.repeatContext !== undefined) {
     attachment.repeatContext = clone(context.capabilities.repeatContext);
+  }
+  const origins = context.contentOrigins ?? [];
+  if (origins.length > 0) {
+    attachment.contentOrigins = clone(origins);
+    attachment.contentAttributes = Object.fromEntries(
+      origins.map(({ attribute, id }) => [attribute, id]),
+    );
   }
   return attachment;
 }

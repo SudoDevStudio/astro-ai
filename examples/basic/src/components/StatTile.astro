@@ -1,0 +1,44 @@
+---
+type Props = {
+	label: string;
+	value: string;
+	tone?: 'neutral' | 'good' | 'warning';
+};
+
+const { label, value, tone = 'neutral' } = Astro.props;
+---
+
+<article class:list={['tile', tone]}>
+	<p class="label">{label}</p>
+	<p class="value">{value}</p>
+</article>
+
+<style>
+	.tile {
+		border: 1px solid #3f4552;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.25rem;
+		padding: 1rem;
+	}
+
+	.tile.good {
+		border-color: #14805e;
+	}
+
+	.tile.warning {
+		border-color: #854d0e;
+	}
+
+	.label {
+		color: #aeb6c5;
+		font-size: 0.8rem;
+		margin: 0;
+		text-transform: uppercase;
+	}
+
+	.value {
+		font-size: 1.6rem;
+		margin: 0;
+	}
+</style>

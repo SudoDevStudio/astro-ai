@@ -1,0 +1,100 @@
+name: Publish beta to npm
+
+# Betas ship from whichever ref you dispatch, so a feature branch can be
+# installed and tested before anything reaches `latest`. Nothing here commits,
+# tags, or creates a release: main keeps pointing at the last real version, and
+# the run's own commit SHA records what a beta was built from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Base version the beta series builds on
+        type: choice
+        options: [prepatch, preminor, premajor]
+        default: prepatch
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-beta
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # `npm version` rewrites package.json and package-lock.json together,
+      # which keeps the `npm ci` below in sync. The first bump lands on
+      # `<next>-beta.0`; because no beta bump is ever committed back, that same
+      # version comes up again on the next run, so the loop walks the counter
+      # forward past whatever the registry already has.
+      - name: Resolve the next beta version
+        id: beta
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          npm version "$BUMP" --preid beta --no-git-tag-version >/dev/null
+          for _ in $(seq 1 50); do
+            version="$(node -p "require('./package.json').version")"
+            if [ -z "$(npm view "$name@$version" version 2>/dev/null || true)" ]; then
+              echo "version=$version" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            npm version prerelease --no-git-tag-version >/dev/null
+          done
+          echo "Could not find an unused beta version after 50 attempts." >&2
+          exit 1
+
+      # A beta must never be installable as the default version. The dist-tag
+      # below is fixed, so this guards the other half: that the version itself
+      # is a prerelease npm will not resolve for a plain install.
+      - name: Verify the version is a beta prerelease
+        env:
+          VERSION: ${{ steps.beta.outputs.version }}
+        run: |
+          case "$VERSION" in
+            *-beta.*) ;;
+            *) echo "Refusing to publish $VERSION as a beta." >&2; exit 1 ;;
+          esac
+
+      - run: npm ci --include=optional
+      - run: npm run format:check
+      - run: npm run check
+      - run: npm test
+      - run: npm pack --dry-run
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --tag beta
+
+      - name: Summarize the published beta
+        env:
+          VERSION: ${{ steps.beta.outputs.version }}
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          {
+            echo "## Published \`$name@$VERSION\`"
+            echo
+            echo "Built from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\`."
+            echo
+            echo '```sh'
+            echo "npm install --save-dev $name@beta"
+            echo '```'
+            echo
+            echo "### What you are testing"
+            echo
+            node scripts/changelog-section.mjs Unreleased || echo '_No entries under Unreleased._'
+          } >> "$GITHUB_STEP_SUMMARY"

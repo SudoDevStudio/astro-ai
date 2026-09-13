@@ -1,0 +1,96 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+
+// Stands in for a CMS response. A real client renders the entry id onto the
+// wrapper it controls, which is exactly what `contentSources` reads.
+const entry = {
+	id: 'demo-entry-7f3a',
+	sku: 'SKU-2201',
+	headline: 'This headline is owned by a content source',
+	body: 'Editing the template will not change these words. The editor resolves the entry behind them instead, and tells the agent to change the entry rather than hardcode the text.',
+};
+
+// A second entry, with no catalog id of its own, to show that each element
+// resolves only the sources whose attributes it actually carries.
+const note = {
+	id: 'demo-entry-b1c4',
+	title: 'A second entry on the same page',
+	body: 'Selecting anything inside this box resolves only demo-cms, because no catalog attribute is present here.',
+};
+---
+
+<Layout
+	title="Content sources"
+	lede="Selecting an element resolves the CMS entry that owns its words."
+>
+	<Callout title="What to try" tone="accent">
+		Select the headline in the first box. The action bar shows a chip per
+		resolved entry, and the Source panel names each entry's source, id, and
+		attribute, with an Open entry or Copy id button beside Copy path.
+	</Callout>
+
+	<section
+		class="from-cms"
+		data-entry-id={entry.id}
+		data-sku={entry.sku}
+		aria-label="Entry with two content sources"
+	>
+		<h2>{entry.headline}</h2>
+		<p>{entry.body}</p>
+		<p class="hint">
+			Carries <code>data-entry-id</code> and <code>data-sku</code>. The first
+			resolves to an entry URL, the second has no entry address so it resolves
+			to the id itself.
+		</p>
+	</section>
+
+	<section class="from-cms" data-entry-id={note.id} aria-label="Entry with one content source">
+		<h2>{note.title}</h2>
+		<p>{note.body}</p>
+		<p class="hint">Carries <code>data-entry-id</code> only.</p>
+	</section>
+
+	<section class="panel" aria-label="Element outside any content source">
+		<h2>This heading belongs to no entry</h2>
+		<p>
+			Nothing here carries a configured attribute, so no chip appears and the
+			agent is told nothing about content ownership. This is ordinary source
+			text that an edit really does change.
+		</p>
+	</section>
+</Layout>
+
+<style>
+	.from-cms,
+	.panel {
+		border: 1px dashed #3f4552;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.5rem;
+		padding: 1rem 1.25rem;
+	}
+
+	.from-cms {
+		border-color: #14805e;
+		border-style: solid;
+	}
+
+	h2 {
+		font-size: 1.1rem;
+		margin: 0;
+	}
+
+	p {
+		margin: 0;
+	}
+
+	.hint {
+		color: #aeb6c5;
+		font-size: 0.85rem;
+	}
+
+	code {
+		color: #86efac;
+	}
+</style>

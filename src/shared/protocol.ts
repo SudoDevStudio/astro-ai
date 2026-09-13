@@ -48,6 +48,8 @@ export type ClientReadyMessage = {
 export type ServerReadyMessage = {
   protocolVersion: typeof PROTOCOL_VERSION;
   history: PatchHistoryState;
+  /** Attribute names the client collects from selected elements, in configured order. */
+  contentAttributes?: string[];
   agent: {
     provider: string;
     available: boolean;
@@ -60,6 +62,8 @@ export type InspectSelectionMessage = {
   requestId: string;
   nodeId: string;
   route: string;
+  /** Configured content source attributes read off the selected element. */
+  contentAttributes?: Record<string, string>;
 };
 
 export type ExecuteVisualCommandMessage = {
@@ -74,6 +78,12 @@ export type HistoryCommandMessage = {
 export type AgentSelectionReference = {
   nodeId: string;
   route: string;
+  /**
+   * Attribute values as read from the page, not the entry references derived
+   * from them. The server resolves them again so a URL in agent context can
+   * only ever come from the configured template.
+   */
+  contentAttributes?: Record<string, string>;
 };
 
 export type AgentExternalContext = {

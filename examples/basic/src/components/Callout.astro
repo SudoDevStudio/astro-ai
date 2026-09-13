@@ -1,0 +1,31 @@
+---
+type Props = {
+	title: string;
+	tone?: 'neutral' | 'accent';
+};
+
+const { title, tone = 'neutral' } = Astro.props;
+---
+
+<aside class:list={['callout', tone]}>
+	<h3>{title}</h3>
+	<slot />
+</aside>
+
+<style>
+	.callout {
+		border: 1px solid #3f4552;
+		border-left-width: 4px;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	.callout.accent {
+		border-left-color: #8b5cf6;
+	}
+
+	h3 {
+		font-size: 0.95rem;
+		margin: 0 0 0.4rem;
+	}
+</style>

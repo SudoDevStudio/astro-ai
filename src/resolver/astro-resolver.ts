@@ -5,6 +5,7 @@ import { parse as parseAstro } from '@astrojs/compiler-rs';
 import { parse as parseJavaScript } from '@babel/parser';
 import MagicString from 'magic-string';
 
+import { ContentSourceRegistry } from '../shared/content-sources.js';
 import type {
   DataProvenance,
   RepeatContext,
@@ -57,16 +58,23 @@ export class AstroResolver {
   readonly #nodesByFile = new Map<string, Set<string>>();
   readonly #indexCache = new Map<string, { sourceHash: string; nodes: SourceNodeRecord[] }>();
   readonly #skillFiles: string[];
+  readonly #contentSources: ContentSourceRegistry;
   readonly #sourceLengths = new Map<string, number>();
 
   constructor(
     projectRoot: string,
     capabilities = new VisualCapabilityResolver(),
     skillFiles: string[] = [],
+    contentSources = new ContentSourceRegistry(),
   ) {
     this.#projectRoot = resolve(projectRoot);
     this.#capabilities = capabilities;
     this.#skillFiles = [...skillFiles];
+    this.#contentSources = contentSources;
+  }
+
+  get contentSources(): ContentSourceRegistry {
+    return this.#contentSources;
   }
 
   get projectRoot(): string {
@@ -315,7 +323,11 @@ export class AstroResolver {
     return nodes;
   }
 
-  resolveSelection(nodeId: string, route: string): SelectionContext {
+  resolveSelection(
+    nodeId: string,
+    route: string,
+    contentAttributes?: Record<string, string>,
+  ): SelectionContext {
     const node = this.requireNode(nodeId);
     const capabilities = this.#capabilities.resolve(node);
 
@@ -332,6 +344,7 @@ export class AstroResolver {
       },
       parentComponents: node.parentComponents,
       capabilities,
+      contentOrigins: this.#contentSources.resolve(contentAttributes),
       relevantFiles: [...new Set([
         node.source.file,
         ...(node.dataProvenance.declaredAt === undefined ? [] : [node.dataProvenance.declaredAt.file]),

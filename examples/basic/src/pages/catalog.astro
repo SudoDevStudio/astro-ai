@@ -1,0 +1,72 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+
+// The realistic shape: one source node rendered in a loop, where every rendered
+// instance carries a different entry id.
+const products = [
+	{ id: 'entry-a17c', sku: 'SKU-1001', name: 'Torque wrench', blurb: 'Calibrated to 200 Nm.' },
+	{ id: 'entry-c23f', sku: 'SKU-1002', name: 'Cable spool', blurb: 'Shielded, 100 m.' },
+	{ id: 'entry-d95b', sku: 'SKU-1003', name: 'Safety harness', blurb: 'Full body, size L.' },
+];
+---
+
+<Layout
+	title="Catalog"
+	lede="One template, many entries. Each rendered card resolves its own entry."
+>
+	<Callout title="What to try" tone="accent">
+		Select the name on the first card, then the second. The source file and line
+		stay the same because all three cards come from one template, but the
+		resolved entry changes with the card you clicked.
+	</Callout>
+
+	<section class="grid" aria-label="Product cards">
+		{
+			products.map((product) => (
+				<article class="card" data-entry-id={product.id} data-sku={product.sku}>
+					<h2>{product.name}</h2>
+					<p>{product.blurb}</p>
+					<p class="sku">{product.sku}</p>
+				</article>
+			))
+		}
+	</section>
+
+	<Callout title="Why this matters">
+		A node id identifies a source location, not a DOM node. The entry id is read
+		from the element you actually clicked, so a loop of CMS records stays
+		distinguishable even though one edit to the template affects them all.
+	</Callout>
+</Layout>
+
+<style>
+	.grid {
+		display: grid;
+		gap: 0.75rem;
+		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	}
+
+	.card {
+		border: 1px solid #14805e;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.3rem;
+		padding: 1rem;
+	}
+
+	h2 {
+		font-size: 1rem;
+		margin: 0;
+	}
+
+	p {
+		margin: 0;
+	}
+
+	.sku {
+		color: #86efac;
+		font-family: ui-monospace, SFMono-Regular, monospace;
+		font-size: 0.8rem;
+	}
+</style>

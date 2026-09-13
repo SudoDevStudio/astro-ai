@@ -44,7 +44,8 @@
   },
   "files": [
     "dist",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "CONFIGURATION.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

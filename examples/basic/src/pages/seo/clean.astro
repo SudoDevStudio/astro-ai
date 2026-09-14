@@ -1,0 +1,75 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import SeoNav from '../../components/SeoNav.astro';
+---
+
+<Layout
+	title="Clean metadata"
+	lede="Every tag present, every value inside the limits each network truncates at."
+	seo={{
+		// Kept under 160 characters, which is where Google truncates. A longer
+		// one would make this page report a warning and stop being the clean case.
+		description:
+			'Complete head metadata: an absolute 1200x630 og:image with declared dimensions and alt text, a matching canonical link, and a large summary card.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		imageSize: [1200, 630],
+	}}
+>
+	<SeoNav />
+
+	<Callout title="What to try" tone="accent">
+		Open the share preview. The Issues tab says there is nothing to fix, and
+		every card renders the wide image, because <code>twitter:card</code> is
+		<code>summary_large_image</code> and the image is large enough for it.
+	</Callout>
+
+	<section class="panel" aria-label="Tags this page declares">
+		<h2>What makes it clean</h2>
+		<ul>
+			<li><code>og:image</code> is an absolute URL, so a crawler can fetch it.</li>
+			<li>It is 1200×630, the size the wide card is designed around.</li>
+			<li>
+				<code>og:image:width</code> and <code>og:image:height</code> are
+				declared, so the first share renders with the image instead of waiting
+				for a crawler to measure it.
+			</li>
+			<li><code>og:image:alt</code> is set, so the card is readable on a screen reader.</li>
+			<li><code>og:url</code> and the canonical link agree.</li>
+			<li>The title is under 60 characters and the description under 160.</li>
+		</ul>
+	</section>
+
+	<Callout title="Compare the cards">
+		Even with identical tags the eight cards differ: LinkedIn drops the
+		description, Google shows a breadcrumb instead of a domain, WhatsApp puts
+		the image in a small square, and X only shows the wide banner because
+		<code>twitter:card</code> asks for it.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px solid #14805e;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0 0 0.6rem;
+	}
+
+	ul {
+		color: #aeb6c5;
+		display: grid;
+		gap: 0.35rem;
+		margin: 0;
+		padding-left: 1.1rem;
+	}
+
+	code {
+		color: #86efac;
+	}
+</style>

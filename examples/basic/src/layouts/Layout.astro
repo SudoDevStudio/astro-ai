@@ -1,12 +1,22 @@
 ---
 import { ClientRouter } from 'astro:transitions';
 
+import Seo from '../components/Seo.astro';
+import type { SeoFields } from '../seo-fields';
+
 type Props = {
 	title: string;
 	lede: string;
+	/**
+	 * Head metadata for this page. `false` emits nothing but a `<title>`, which
+	 * is what `/seo/minimal/` needs to show every fallback the networks apply.
+	 */
+	seo?: SeoFields | false;
+	/** `false` drops `lang` from `<html>`, which search and screen readers both need. */
+	htmlLang?: string | false;
 };
 
-const { title, lede } = Astro.props;
+const { title, lede, seo = {}, htmlLang = 'en' } = Astro.props;
 const { pathname } = Astro.url;
 
 const pages = [
@@ -14,19 +24,23 @@ const pages = [
 	{ href: '/content/', label: 'Content sources' },
 	{ href: '/components/', label: 'Components' },
 	{ href: '/catalog/', label: 'Catalog' },
+	{ href: '/island/', label: 'React island' },
+	{ href: '/seo/', label: 'Share preview' },
 ];
+
+const pageTitle = `${title} · astro-ai example`;
 ---
 
-<html lang="en">
+<html lang={htmlLang === false ? undefined : htmlLang}>
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width" />
-		<title>{title} · astro-ai example</title>
+		{seo === false ? <title>{pageTitle}</title> : <Seo title={pageTitle} {...seo} />}
 		<!--
 			Client-side navigation is deliberate here. It exercises the path where
 			the editor re-establishes itself against a swapped page: the selection
-			is cleared, insertion zones are re-requested, and chat windows are
-			restored.
+			is cleared, insertion zones are re-requested, chat windows are restored,
+			and an open share preview re-reads the new route's head.
 		-->
 		<ClientRouter />
 	</head>

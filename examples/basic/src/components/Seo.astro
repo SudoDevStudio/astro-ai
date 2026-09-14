@@ -1,0 +1,59 @@
+---
+import type { SeoFields } from '../seo-fields';
+
+/**
+ * Renders the head metadata the share preview reads.
+ *
+ * `Astro.site ?? Astro.url.origin` is the idiom worth copying. Crawlers fetch
+ * `og:image` and `og:url` without the page's base, so both have to be absolute,
+ * and only `site` knows the deployed origin. This example deliberately leaves
+ * `site` unset in `astro.config.mjs`, so the fallback resolves against whatever
+ * origin the dev server is on and the images actually load while you look at
+ * the preview. A real site sets `site` and these become its public URLs.
+ */
+type Props = SeoFields & { title: string };
+
+const {
+	title,
+	description,
+	image,
+	imageAlt,
+	imageSize = [1200, 630],
+	relativeImage = false,
+	canonical,
+	ogUrl,
+	ogType = 'website',
+	siteName = 'astro-ai example',
+	twitterCard = 'summary_large_image',
+	robots,
+	themeColor = '#0d1015',
+	favicon = true,
+} = Astro.props;
+
+const absolute = (path: string) => new URL(path, Astro.site ?? Astro.url.origin).href;
+const canonicalUrl = canonical ?? absolute(Astro.url.pathname);
+const imageUrl = image === undefined ? undefined : relativeImage ? image : absolute(image);
+---
+
+<title>{title}</title>
+{description && <meta name="description" content={description} />}
+{robots && <meta name="robots" content={robots} />}
+{themeColor && <meta name="theme-color" content={themeColor} />}
+{favicon && <link rel="icon" href="/favicon.svg" type="image/svg+xml" />}
+<link rel="canonical" href={canonicalUrl} />
+
+<meta property="og:title" content={title} />
+{description && <meta property="og:description" content={description} />}
+{ogType && <meta property="og:type" content={ogType} />}
+{siteName && <meta property="og:site_name" content={siteName} />}
+<meta property="og:url" content={ogUrl ?? canonicalUrl} />
+{imageUrl && <meta property="og:image" content={imageUrl} />}
+{imageUrl && imageSize && <meta property="og:image:width" content={String(imageSize[0])} />}
+{imageUrl && imageSize && <meta property="og:image:height" content={String(imageSize[1])} />}
+{imageUrl && imageAlt && <meta property="og:image:alt" content={imageAlt} />}
+
+{twitterCard && <meta name="twitter:card" content={twitterCard} />}
+{twitterCard && <meta name="twitter:title" content={title} />}
+{twitterCard && description && <meta name="twitter:description" content={description} />}
+{twitterCard && imageUrl && <meta name="twitter:image" content={imageUrl} />}
+{twitterCard && imageUrl && imageAlt && <meta name="twitter:image:alt" content={imageAlt} />}

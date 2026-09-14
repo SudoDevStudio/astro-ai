@@ -75,6 +75,16 @@ export class SelectionOverlay {
    * rendered page, so the server can name the attributes but only the browser
    * can read what is in them.
    */
+  /**
+   * Re-measures every outline, control, and anchor against the page as it is
+   * now. Scrolling and viewport resizes trigger this on their own; anything
+   * else that reflows the page — the dock taking or releasing its column —
+   * has to say so, because no event fires for it.
+   */
+  reposition(): void {
+    this.#onViewportChange();
+  }
+
   setContentAttributes(attributes: readonly string[]): void {
     this.#contentAttributes = [...attributes];
   }
@@ -215,6 +225,32 @@ export class SelectionOverlay {
     } else {
       this.#syncSelection();
     }
+  }
+
+  /**
+   * Replaces the page selection with the one a chat window already owns.
+   *
+   * The page has a single selection while every conversation keeps its own
+   * attachment, so focusing a window has to move the outline, the action bar,
+   * and the arrow back to what that conversation was working on. Without it the
+   * live selection simply leaks into whichever window was focused last, and two
+   * tabs end up claiming the same element.
+   */
+  showSelection(contexts: readonly SelectionContext[], elements: readonly HTMLElement[]): void {
+    this.#clearItems();
+    this.#pending.clear();
+    for (const [index, context] of contexts.entries()) {
+      const nodeId = context.selectedNode.nodeId;
+      const element = elements[index];
+      if (element === undefined || !element.isConnected || this.#selected.has(nodeId)) continue;
+      const [highlight, label] = createHighlight(true);
+      document.documentElement.append(highlight);
+      const item: SelectedItem = { element, context, highlight, label };
+      this.#selected.set(nodeId, item);
+      this.#updateItem(item);
+      this.#primaryNodeId = nodeId;
+    }
+    this.#syncSelection();
   }
 
   clearSelection(): void {

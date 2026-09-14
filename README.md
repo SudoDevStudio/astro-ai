@@ -53,6 +53,78 @@ codex login
 - Ask Codex or Claude for explanations and code changes.
 - Attach text, code, or screenshots by picker, drag-and-drop, or clipboard paste.
 - Attach Vite errors and Astro audit findings with **Fix with AI**.
+- Preview the current route as a shared link on X, Facebook, LinkedIn,
+  Instagram, Discord, Slack, WhatsApp, and Google, with an audit of what will
+  be wrong and **Fix with AI** on each finding.
+- Float the chat windows over the page or dock them to a side column with tabs.
+
+## Share preview
+
+The green **SEO** button on a chat window's toolbar opens a full-screen reading
+of the current route's head metadata.
+
+**Previews** renders one card per network. Each reads the tag chain that network
+actually reads — X prefers `twitter:*` and falls back to `og:*`, Google ignores
+both and reads `<title>` — and truncates where that network truncates, so a
+title that fits on LinkedIn can be visibly cut on Google. Instagram appears as a
+direct message link card, because Instagram has no feed link previews.
+
+**Issues** reports what a reader will see go wrong, not a checklist score: a
+relative `og:image` no crawler can fetch, an image that loads at 64px despite
+declaring 1200×630, an `og:url` that disagrees with the canonical link. Each
+finding names the networks it affects, and **Fix with AI** sends it to the agent
+with the current tag values.
+
+**Tags** lists every title, meta, link, and `lang` value the page rendered,
+including duplicates that crawlers ignore.
+
+The sheet reads the live page, so **Re-read page** after an edit shows the
+result once Vite has applied it.
+
+It needs no setup — everything comes from the page's own head. The one setting
+narrows it to the networks you ship to:
+
+```js
+buildWithAI({
+  seo: { networks: ['x', 'linkedin', 'google', 'slack'] },
+});
+```
+
+`seo: false` hides the button. See [CONFIGURATION.md](CONFIGURATION.md#seo).
+
+## Chat layout
+
+Chat windows float over the page by default: drag them by the header, resize
+from the left edge, collapse one to a badge, and open up to six.
+
+Each conversation owns its own selection. Switching to another window or tab
+restores the element that conversation was working on — the outline, the action
+bar, and the arrow all move with it — and opening a new chat while something is
+selected inherits that selection.
+
+The **Dock** button moves them all into a column on the right instead, where tabs
+switch between the same conversations and a tab marks one with a run in flight.
+The page reflows into the remaining width rather than sitting behind the panel.
+**Float** undocks them again. Switching moves no state, so a run in flight keeps
+running, and the choice is remembered for the session.
+
+Set the layout the editor opens in with `chatLayout: 'fixed'`. It applies until
+someone switches layouts themselves, after which their choice wins for the rest
+of the session.
+
+A root margin reflows normal flow but cannot move your app's own
+`position: fixed` elements, which are laid out against the viewport. The dock
+publishes its width as `--astro-ai-dock-width` on the root element so you can
+offset them yourself:
+
+```css
+.my-fixed-header {
+  right: var(--astro-ai-dock-width, 0px);
+}
+```
+
+The variable is only set while the dock holds a column. Below 720px the dock
+becomes a bottom sheet and takes no column at all.
 
 ## Options
 
@@ -77,6 +149,8 @@ buildWithAI({
   excludeDirectories: ['vendor', 'src/generated'],
   skills: ['AGENTS.md'],
   maxRecoveryFiles: 20,
+  chatLayout: 'fixed', // or 'floating'; the user can switch either way
+  seo: { networks: ['x', 'linkedin', 'google', 'slack'] },
   visualComponents: [
     {
       name: 'Card',

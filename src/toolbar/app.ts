@@ -18,6 +18,7 @@ import { createChatDrawerStyle } from './chat-drawer.js';
 import { ChatWindowManager } from './chat-windows.js';
 import { DiagnosticActionBridge } from './diagnostic-actions.js';
 import { SelectionOverlay } from './overlay.js';
+import { createSeoSheetStyle, SeoPreviewSheet } from './seo-sheet.js';
 
 const APP_OPEN_KEY = 'astro-ai:app-open';
 
@@ -28,7 +29,19 @@ export default defineToolbarApp({
     const pendingInspectRequests = new Map<string, string>();
     let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
+    let seoSheet: SeoPreviewSheet;
     const windows = new ChatWindowManager({
+      onOpenSeo() {
+        seoSheet.toggle();
+      },
+      onPageReflow() {
+        // The dock just changed how much width the page has, so every outline
+        // and arrow has to be measured against the new layout.
+        overlay.reposition();
+      },
+      onRestoreSelection(contexts, elements) {
+        overlay.showSelection(contexts, elements);
+      },
       onSubmit({ requestId, sessionId, instruction, mode, attachments, locked, files, externalContext }) {
         server.send(CLIENT_EVENTS.agentInstruction, {
           requestId,
@@ -112,16 +125,17 @@ export default defineToolbarApp({
         windows.setSelectionAnchor(rect);
       },
     });
-    const diagnosticActions = new DiagnosticActionBridge({
-      onFix(context) {
-        overlay.clearSelection();
-        app.toggleState({ state: true });
-        window.setTimeout(() => windows.openWithExternalContext(context), 0);
-      },
-    });
+    const openWithExternalContext = (context: Parameters<typeof windows.openWithExternalContext>[0]): void => {
+      overlay.clearSelection();
+      app.toggleState({ state: true });
+      window.setTimeout(() => windows.openWithExternalContext(context), 0);
+    };
+    const diagnosticActions = new DiagnosticActionBridge({ onFix: openWithExternalContext });
+    seoSheet = new SeoPreviewSheet({ onFix: openWithExternalContext });
 
     const drawerStyle = createChatDrawerStyle();
-    canvas.replaceChildren(drawerStyle, windows.element);
+    const seoStyle = createSeoSheetStyle();
+    canvas.replaceChildren(drawerStyle, seoStyle, windows.element, seoSheet.element);
     windows.hideAll(false);
 
     /**
@@ -132,7 +146,7 @@ export default defineToolbarApp({
      */
     function ensureMounted(): void {
       if (windows.element.parentNode === canvas) return;
-      canvas.append(drawerStyle, windows.element);
+      canvas.append(drawerStyle, seoStyle, windows.element, seoSheet.element);
     }
 
     app.onToggled(({ state }) => {
@@ -151,13 +165,18 @@ export default defineToolbarApp({
       } else {
         overlay.disable();
         windows.hideAll();
+        seoSheet.close();
       }
       restoringOpenState = false;
     });
 
-    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes }) => {
+    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes, chatLayout, seo }) => {
       if (disposed || protocolVersion !== PROTOCOL_VERSION) return;
       overlay.setContentAttributes(contentAttributes ?? []);
+      windows.setDefaultLayout(chatLayout);
+      windows.setSeoAvailable(seo !== false);
+      seoSheet.configure(seo);
+      if (seo === false) seoSheet.close();
       windows.setProvider(agent);
       windows.setHistory(history);
       requestInsertionZones();
@@ -234,6 +253,8 @@ export default defineToolbarApp({
       ensureMounted();
       overlay.clearSelection();
       windows.handleNavigation();
+      // The new route has its own head, so an open preview is reading the wrong page.
+      seoSheet.handleNavigation();
       if (windows.visible || readSession(APP_OPEN_KEY) === 'true') {
         overlay.enable();
         overlay.start();
@@ -253,6 +274,7 @@ export default defineToolbarApp({
       window.removeEventListener('popstate', onNavigation);
       overlay.destroy();
       diagnosticActions.destroy();
+      seoSheet.destroy();
       windows.destroy();
     };
     import.meta.hot?.dispose(cleanup);

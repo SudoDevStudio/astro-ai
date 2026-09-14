@@ -1,0 +1,64 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>pending</title></head>
+<body style="margin:0;background:#111">
+<pre id="out">running</pre>
+<script type="module">
+import { ChatWindowManager } from '../../dist/toolbar/chat-windows.js';
+import { createChatDrawerStyle } from '../../dist/toolbar/chat-drawer.js';
+
+document.head.append(createChatDrawerStyle());
+const manager = new ChatWindowManager({
+  onSubmit(){}, onCancel(){}, onUndo(){}, onRedo(){}, onSessionClose(){}, onEmpty(){},
+  onSelectionPaused(){}, onOpenSeo(){}, onPageReflow(){},
+});
+document.body.append(manager.element);
+manager.openAll(false, false, true);
+const drawer = manager.focused();
+drawer.setNotice('Source-backed selection resolved locally.');
+drawer.setProvider({ provider: 'codex', available: true, authenticated: true, message: 'Ready' });
+
+const lines = [];
+let failures = 0;
+
+function check(width) {
+  drawer.element.style.width = `${width}px`;
+  drawer.element.getBoundingClientRect();
+  const panel = drawer.element.getBoundingClientRect();
+  const controls = [
+    ['SEO', drawer.element.querySelector('.seo-button')],
+    ['Dock', drawer.element.querySelector('.layout-button')],
+    ['close', drawer.element.querySelector('.close-button')],
+    ['collapse', drawer.element.querySelector('.collapse-button')],
+  ];
+  const results = controls.map(([name, node]) => {
+    const r = node.getBoundingClientRect();
+    const inside = r.right <= panel.right + 0.5 && r.left >= panel.left - 0.5 && r.width > 0;
+    if (!inside) failures += 1;
+    return `${name}:${inside ? 'ok' : `CLIPPED(right=${r.right.toFixed(0)} panel=${panel.right.toFixed(0)})`}`;
+  });
+  const label = drawer.element.querySelector('.layout-button .tool-label');
+  const labelShown = getComputedStyle(label).display !== 'none';
+  const notice = drawer.element.querySelector('.notice-text').getBoundingClientRect();
+  lines.push(`${String(width).padStart(4)}px  ${results.join('  ')}  labels=${labelShown ? 'shown' : 'hidden'}  noticeW=${notice.width.toFixed(0)}`);
+}
+
+for (const width of [460, 430, 414, 400, 380, 340, 320]) check(width);
+
+// And the docked panel, which is sized by the dock rather than by itself.
+drawer.element.style.removeProperty('width');
+manager.setLayout('fixed');
+for (const dockWidth of [420, 360, 320]) {
+  manager.setDockWidth(dockWidth);
+  manager.element.getBoundingClientRect();
+  const panel = manager.element.getBoundingClientRect();
+  const dockBtn = drawer.element.querySelector('.layout-button').getBoundingClientRect();
+  const seoBtn = drawer.element.querySelector('.seo-button').getBoundingClientRect();
+  const ok = dockBtn.right <= panel.right + 0.5 && seoBtn.right <= panel.right + 0.5 && dockBtn.width > 0;
+  if (!ok) failures += 1;
+  lines.push(`dock ${dockWidth}px  ${ok ? 'ok' : `CLIPPED(dock.right=${dockBtn.right.toFixed(0)} panel=${panel.right.toFixed(0)})`}`);
+}
+
+document.getElementById('out').textContent = lines.join('\n');
+document.title = failures === 0 ? 'ALL-VISIBLE' : `FAILURES-${failures}`;
+</script>
+</body></html>

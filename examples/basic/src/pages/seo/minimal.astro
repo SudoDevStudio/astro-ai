@@ -1,0 +1,70 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import SeoNav from '../../components/SeoNav.astro';
+---
+
+<!--
+	`seo={false}` emits nothing but a <title>, and `htmlLang={false}` drops the
+	lang attribute. This is the state a page is in before anyone has thought
+	about how it gets shared.
+-->
+<Layout
+	title="Bare head"
+	lede="A title and nothing else, which is what most pages start as."
+	seo={false}
+	htmlLang={false}
+>
+	<SeoNav />
+
+	<Callout title="What to try" tone="accent">
+		Open the share preview. Every card falls back to the document title and
+		renders without an image, and each one is marked with what it had to do
+		without. This is what the link looks like when somebody pastes it.
+	</Callout>
+
+	<section class="panel" aria-label="What this page does not declare">
+		<h2>What is missing</h2>
+		<ul>
+			<li>No <code>meta description</code>, so Google writes its own snippet from the page text.</li>
+			<li>No <code>og:title</code> or <code>og:description</code>, so cards fall back to the document title and render with an empty body.</li>
+			<li>No <code>og:image</code>, so every card is a text-only link.</li>
+			<li>No <code>twitter:card</code>, so X shows the small square rather than the banner.</li>
+			<li>No <code>og:url</code> or canonical link, so the same page shared with different query strings counts as different links.</li>
+			<li>No <code>lang</code> on <code>&lt;html&gt;</code>, so search engines and screen readers both guess.</li>
+			<li>No icon, so Google shows a generic globe and Slack loses the site mark.</li>
+		</ul>
+	</section>
+
+	<Callout title="The fallbacks are the point">
+		Nothing here is an accident of the fixture. Each card shows the tag chain
+		its network falls back through when the tag it wants is absent — which is
+		why the same bare page still looks different on Google, X and WhatsApp.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px dashed #78551c;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0 0 0.6rem;
+	}
+
+	ul {
+		color: #aeb6c5;
+		display: grid;
+		gap: 0.35rem;
+		margin: 0;
+		padding-left: 1.1rem;
+	}
+
+	code {
+		color: #fcd34d;
+		font-family: ui-monospace, SFMono-Regular, monospace;
+	}
+</style>

@@ -1,0 +1,165 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+import BuildStatus from '../components/BuildStatus.jsx';
+import ProductPicker from '../components/ProductPicker.jsx';
+---
+
+<Layout
+	title="React island"
+	lede="Everything the editor does in an Astro template, it also does inside a React island."
+	seo={{
+		description:
+			'A React island rendered inside an Astro page, with editable props, a repeated template, and content source attributes on every row.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		Select the island heading and edit it: the Source panel names
+		<code>ProductPicker.jsx</code>, not this page. Then select the island itself
+		from the page and open Props — <code>heading</code>, <code>cta</code> and
+		<code>tone</code> are registered in <code>astro.config.mjs</code>, so they
+		are editable from the action bar.
+	</Callout>
+
+	<ProductPicker
+		client:load
+		heading="Pick the parts for this quote"
+		cta="Clear selection"
+		tone="accent"
+	/>
+
+	<Callout title="Interactivity keeps working">
+		Tick a checkbox with selection mode on. Click drives the running app, so the
+		total updates, and the element stays selected for the next edit.
+	</Callout>
+
+	<BuildStatus client:visible label="Second island, hydrated on view" />
+
+	<Callout title="Repeated rows, separate entries">
+		The three rows come from one <code>.map()</code>, so they share a single
+		source node and one edit rewrites all of them — the action bar says so. The
+		entry id still comes from the row you clicked, because
+		<code>data-entry-id</code> is read from the DOM element, not from source.
+	</Callout>
+</Layout>
+
+<style>
+	code {
+		color: #c4b5fd;
+	}
+
+	:global(.picker) {
+		border: 1px solid #3f4552;
+		border-radius: 10px;
+		display: grid;
+		gap: 0.75rem;
+		padding: 1.25rem;
+	}
+
+	:global(.picker.accent) {
+		border-color: #6d4bb0;
+	}
+
+	:global(.picker h2) {
+		font-size: 1.15rem;
+		margin: 0;
+	}
+
+	:global(.picker .intro) {
+		color: #aeb6c5;
+		margin: 0;
+	}
+
+	:global(.picker .rows) {
+		display: grid;
+		gap: 0.5rem;
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	:global(.picker .row) {
+		align-items: center;
+		border: 1px solid #262b35;
+		border-radius: 8px;
+		column-gap: 0.75rem;
+		display: grid;
+		grid-template-columns: 1fr auto;
+		padding: 0.7rem 0.9rem;
+	}
+
+	:global(.picker .row.picked) {
+		border-color: #14805e;
+	}
+
+	:global(.picker .row label) {
+		align-items: center;
+		cursor: pointer;
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	:global(.picker .name) {
+		font-weight: 600;
+	}
+
+	:global(.picker .note) {
+		color: #aeb6c5;
+		font-size: 0.85rem;
+		grid-column: 1;
+		margin: 0;
+	}
+
+	:global(.picker .price) {
+		font-family: ui-monospace, SFMono-Regular, monospace;
+		grid-column: 2;
+		grid-row: 1 / span 2;
+	}
+
+	:global(.picker .summary) {
+		align-items: center;
+		border-top: 1px solid #262b35;
+		display: flex;
+		justify-content: space-between;
+		padding-top: 0.75rem;
+	}
+
+	:global(.picker .total) {
+		font-family: ui-monospace, SFMono-Regular, monospace;
+		font-size: 1.05rem;
+	}
+
+	:global(.picker button) {
+		background: #4c1d95;
+		border: 1px solid #8b5cf6;
+		border-radius: 7px;
+		color: #f5f3ff;
+		cursor: pointer;
+		font: inherit;
+		padding: 0.45rem 0.8rem;
+	}
+
+	:global(.status) {
+		align-items: center;
+		border: 1px dashed #3f4552;
+		border-radius: 8px;
+		display: flex;
+		gap: 0.6rem;
+		padding: 0.7rem 1rem;
+	}
+
+	:global(.status .dot) {
+		background: #22c55e;
+		border-radius: 50%;
+		height: 8px;
+		width: 8px;
+	}
+
+	:global(.status .elapsed) {
+		color: #aeb6c5;
+		font-size: 0.85rem;
+		margin-left: auto;
+	}
+</style>

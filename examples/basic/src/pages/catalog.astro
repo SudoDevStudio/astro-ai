@@ -14,6 +14,12 @@ const products = [
 <Layout
 	title="Catalog"
 	lede="One template, many entries. Each rendered card resolves its own entry."
+	seo={{
+		description:
+			'One template rendered in a loop, where every card resolves its own CMS entry from the element you clicked while the source location stays put.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+	}}
 >
 	<Callout title="What to try" tone="accent">
 		Select the name on the first card, then the second. The source file and line

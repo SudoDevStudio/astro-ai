@@ -45,11 +45,28 @@ export type ClientReadyMessage = {
   activeSessionIds?: string[];
 };
 
+/**
+ * Share preview settings declared in `astro.config.mjs`.
+ *
+ * Everything a card shows is read from the page's own head at preview time, so
+ * there is nothing here to describe the content — only which cards to draw.
+ */
+export type SeoPreviewConfig = {
+  /** Networks to render, in order. Every network when omitted. */
+  networks?: string[];
+};
+
+export type ChatLayoutPreference = 'floating' | 'fixed';
+
 export type ServerReadyMessage = {
   protocolVersion: typeof PROTOCOL_VERSION;
   history: PatchHistoryState;
   /** Attribute names the client collects from selected elements, in configured order. */
   contentAttributes?: string[];
+  /** Layout the chat opens in before the user chooses one for the session. */
+  chatLayout?: ChatLayoutPreference;
+  /** `false` hides the share preview outright. */
+  seo?: SeoPreviewConfig | false;
   agent: {
     provider: string;
     available: boolean;
@@ -87,7 +104,7 @@ export type AgentSelectionReference = {
 };
 
 export type AgentExternalContext = {
-  kind: 'error' | 'audit';
+  kind: 'error' | 'audit' | 'seo';
   title: string;
   message: string;
   file?: string;

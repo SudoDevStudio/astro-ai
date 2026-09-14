@@ -17,6 +17,10 @@ import {
   normalizeContentAttributes,
   type ContentSourceDefinition,
 } from '../shared/content-sources.js';
+import {
+  normalizeSeoPreview,
+  type SeoPreviewOption,
+} from '../shared/seo-preview.js';
 import type { VisualComponentDefinition } from '../shared/visual-components.js';
 import {
   CLIENT_EVENTS,
@@ -34,6 +38,7 @@ import {
   type InspectSelectionMessage,
   type InsertionZonesRequestMessage,
   type InsertionZonesResolvedMessage,
+  type ChatLayoutPreference,
   type ServerReadyMessage,
   type VisualEditorErrorMessage,
 } from '../shared/protocol.js';
@@ -67,6 +72,13 @@ export type BuildWithAIOptions = {
   visualComponents?: VisualComponentDefinition[];
   /** CMS and other external systems that own rendered content, keyed by a DOM attribute. */
   contentSources?: ContentSourceDefinition[];
+  /**
+   * Layout the chat opens in. The toolbar remembers whatever the user switches
+   * to for the rest of the session, so this is a starting point, not a lock.
+   */
+  chatLayout?: ChatLayoutPreference;
+  /** Share preview settings, or `false` to hide it. */
+  seo?: SeoPreviewOption;
 };
 
 export { BUILD_AI_VITE_PLUGIN_NAME, buildAIVitePlugin } from '../vite/build-ai-plugin.js';
@@ -88,6 +100,13 @@ export type {
   ContentSourceDefinition,
 } from '../shared/content-sources.js';
 export type { VisualComponentDefinition } from '../shared/visual-components.js';
+export {
+  isSeoNetworkId,
+  normalizeSeoPreview,
+  SEO_NETWORK_IDS,
+} from '../shared/seo-preview.js';
+export type { SeoNetworkId, SeoPreviewOption } from '../shared/seo-preview.js';
+export type { ChatLayoutPreference, SeoPreviewConfig } from '../shared/protocol.js';
 
 export function agentSelectionReferences(
   message: Pick<AgentInstructionMessage, 'attachments'>,
@@ -163,6 +182,9 @@ export default function buildWithAI(
   let engine: VisualCommandEngine | undefined;
   let viteServer: ViteDevServer | undefined;
   let agent: AgentFallback = new UnavailableAgentFallback();
+  let seoPreview: ServerReadyMessage['seo'];
+  const chatLayout: ChatLayoutPreference | undefined =
+    options.chatLayout === 'fixed' || options.chatLayout === 'floating' ? options.chatLayout : undefined;
 
   return {
     name: TOOLBAR_APP_ID,
@@ -178,6 +200,22 @@ export default function buildWithAI(
           // declaration is reported and skipped instead of stopping dev.
           const detail = error instanceof Error ? error.message : 'Invalid content source configuration.';
           logger.error(`[astro-ai] ${detail} Content sources are disabled.`);
+        }
+
+        try {
+          seoPreview = normalizeSeoPreview(options.seo);
+        } catch (error) {
+          // The preview reads the page either way, so a bad setting costs a
+          // narrowed card list rather than the whole feature.
+          const detail = error instanceof Error ? error.message : 'Invalid share preview configuration.';
+          logger.error(`[astro-ai] ${detail} The share preview falls back to its defaults.`);
+          seoPreview = undefined;
+        }
+
+        if (options.chatLayout !== undefined && chatLayout === undefined) {
+          logger.error(
+            `[astro-ai] \`chatLayout\` must be 'floating' or 'fixed'; received ${JSON.stringify(options.chatLayout)}. Using 'floating'.`,
+          );
         }
 
         resolver = new AstroResolver(
@@ -298,6 +336,8 @@ export default function buildWithAI(
             protocolVersion: PROTOCOL_VERSION,
             history: activeEngine.transactions.state(),
             ...(contentAttributes.length === 0 ? {} : { contentAttributes }),
+            ...(chatLayout === undefined ? {} : { chatLayout }),
+            ...(seoPreview === undefined ? {} : { seo: seoPreview }),
             agent: await activeAgent.status(),
           });
           for (const requestId of message.pendingAgentRequestIds ?? []) {

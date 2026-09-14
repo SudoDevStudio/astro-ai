@@ -1,0 +1,122 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import SeoNav from '../../components/SeoNav.astro';
+
+// Deliberately wrong in several ways at once, and every one of them is a
+// mistake that ships to production regularly.
+const seo = {
+	// A crawler fetches this tag without the page's base, so a relative path
+	// resolves to nothing on its side.
+	image: '/og/tiny.png',
+	relativeImage: true,
+	// 64x64: small enough that Facebook, LinkedIn, WhatsApp and Slack drop it.
+	imageSize: false as const,
+	// No alt text, so the card image is unreadable on a screen reader.
+	description:
+		'This description runs well past the point Google stops reading it, which is somewhere around one hundred and sixty characters, and it keeps going anyway so that the preview has something to cut off in front of you.',
+	// Disagrees with the canonical link the layout emits for this route.
+	ogUrl: 'https://example.com/seo/broken-elsewhere',
+	// Not one of summary, summary_large_image, app or player.
+	twitterCard: 'large',
+	robots: 'noindex, nofollow',
+	siteName: false as const,
+	ogType: false as const,
+	themeColor: false as const,
+	favicon: false,
+};
+---
+
+<Layout
+	title="Everything wrong at once, in a title far longer than a search result will ever show"
+	lede="Twelve findings across three severities, each one a mistake that ships to production regularly."
+	seo={seo}
+>
+	<SeoNav />
+
+	<Callout title="What to try" tone="accent">
+		Open the share preview and read the Issues tab top to bottom. Errors sort
+		first, then warnings, then notes. Each finding names the networks a reader
+		would actually see it on, and <strong>Fix with AI</strong> hands it to the
+		agent with the current tag values attached.
+	</Callout>
+
+	<section class="panel" aria-label="What is wrong with this page">
+		<h2>What is wrong here</h2>
+		<dl>
+			<dt>og:image is <code>/og/tiny.png</code></dt>
+			<dd>
+				Relative, so no crawler can resolve it — and 64×64, so the networks
+				that could resolve it would drop it for being too small. Two separate
+				errors from one tag.
+			</dd>
+
+			<dt>No og:image:width, og:image:height, or og:image:alt</dt>
+			<dd>
+				Without declared dimensions the first share of a link often renders
+				before the crawler has measured the image. Without alt text the card is
+				unreadable on a screen reader.
+			</dd>
+
+			<dt>twitter:card is <code>large</code></dt>
+			<dd>Not a card type X knows, so it falls back to a plain link.</dd>
+
+			<dt>og:url points somewhere else</dt>
+			<dd>
+				It says <code>example.com/seo/broken-elsewhere</code> while the canonical
+				link points at this route, so search and social attribute the page to
+				two different addresses.
+			</dd>
+
+			<dt>Title and description are too long</dt>
+			<dd>The title is cut in a Google result and the description is cut everywhere.</dd>
+
+			<dt>noindex, no site name, no og:type, no favicon</dt>
+			<dd>
+				The notes tier: deliberate on staging, expensive in production. Slack and
+				Discord label the unfurl with the bare domain, and Google shows a generic
+				globe beside the result.
+			</dd>
+		</dl>
+	</section>
+
+	<Callout title="Fix it and watch it clear">
+		Send the whole list to the agent, or edit <code>seo</code> in the frontmatter
+		of this page by hand. Press <strong>Re-read page</strong> in the sheet once
+		Vite has applied the change and the findings clear as you fix them.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px solid #9f3949;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0 0 0.75rem;
+	}
+
+	dl {
+		display: grid;
+		gap: 0.75rem;
+		margin: 0;
+	}
+
+	dt {
+		color: #fda4af;
+		font-weight: 700;
+	}
+
+	dd {
+		color: #aeb6c5;
+		margin: 0.2rem 0 0;
+	}
+
+	code {
+		color: #fda4af;
+		font-family: ui-monospace, SFMono-Regular, monospace;
+	}
+</style>

@@ -7,6 +7,12 @@ import StatTile from '../components/StatTile.astro';
 <Layout
 	title="Components"
 	lede="Registered components expose typed props the action bar can edit directly."
+	seo={{
+		description:
+			'Components registered in astro.config.mjs expose typed props, so an enum renders as a select in the action bar rather than a free text field.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+	}}
 >
 	<Callout title="What to try" tone="accent">
 		Select a tile and open Props. `tone` is declared as an enum in

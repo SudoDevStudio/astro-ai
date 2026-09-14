@@ -5,7 +5,12 @@ import type {
 } from '../shared/protocol.js';
 import { DEFAULT_SESSION_ID } from '../shared/protocol.js';
 import type { SelectionContext } from '../shared/selection-context.js';
-import { ChatDrawer, type AgentSubmit } from './chat-drawer.js';
+import {
+  ChatDrawer,
+  isNarrowViewport,
+  type AgentSubmit,
+  type ChatLayout,
+} from './chat-drawer.js';
 import { chatWindowLayer } from './layers.js';
 
 export type ChatSessionRecord = { id: string; title: string };
@@ -21,21 +26,51 @@ export type ChatWindowCallbacks = {
   onEmpty(): void;
   /** True once every window is collapsed, which pauses page selection mode. */
   onSelectionPaused(paused: boolean): void;
+  /** Opens the share preview for the current route. */
+  onOpenSeo?(): void;
+  /**
+   * The dock took or released its column, so the page underneath has reflowed
+   * and every measured overlay is now pointing at where things used to be.
+   */
+  onPageReflow?(): void;
+  /**
+   * Focus moved to another conversation, which owns a different selection. The
+   * page shows one selection at a time, so it has to follow.
+   */
+  onRestoreSelection?(contexts: SelectionContext[], elements: HTMLElement[]): void;
 };
 
 const SESSIONS_KEY = 'astro-ai:chat-sessions';
 const FOCUS_KEY = 'astro-ai:chat-focused';
+const LAYOUT_KEY = 'astro-ai:chat-layout';
+const DOCK_WIDTH_KEY = 'astro-ai:chat-dock-width';
+const DOCK_COLLAPSED_KEY = 'astro-ai:chat-dock-collapsed';
 export const MAX_CHAT_WINDOWS = 6;
+export const DOCK_MIN_WIDTH = 320;
+export const DOCK_MAX_WIDTH = 760;
+export const DOCK_DEFAULT_WIDTH = 420;
+/** Width of the collapsed dock rail, which still holds the expand control. */
+export const DOCK_RAIL_WIDTH = 44;
 
 /**
  * Owns every open chat window. Each window is an independent conversation with
  * its own server session; the shared source history is mirrored into all of
  * them because every window edits the same project files.
+ *
+ * Two layouts, one set of conversations. Floating windows sit over the page and
+ * carry their own position; the dock takes a column on the right, reflows the
+ * page into what is left, and switches between the same conversations with
+ * tabs. Switching between them moves no state — a run in flight keeps running.
  */
 export class ChatWindowManager {
   readonly element: HTMLElement;
   readonly #callbacks: ChatWindowCallbacks;
   readonly #drawers = new Map<string, ChatDrawer>();
+  readonly #dockHeader: HTMLElement;
+  readonly #dockBody: HTMLElement;
+  readonly #tabStrip: HTMLElement;
+  readonly #dockCollapse: HTMLButtonElement;
+  readonly #pageStyle: HTMLStyleElement;
   #order: string[] = [];
   #focusedId: string | undefined;
   #provider: ServerReadyMessage['agent'] | undefined;
@@ -43,11 +78,58 @@ export class ChatWindowManager {
   /** Session ids, least recently focused first, deciding the stacking order. */
   #stack: string[] = [];
   #visible = false;
+  #layout: ChatLayout;
+  /** True once the user has switched layouts, which outranks the configured default. */
+  #layoutChosen: boolean;
+  #seoAvailable = true;
+  #dockWidth: number;
+  #dockCollapsed: boolean;
+  #dockResizeFrom: { pointer: number; width: number } | undefined;
+  /** The inset currently applied to the page, so it is only rewritten on change. */
+  #pageInset = 0;
+  /** What is selected on the page right now, so a new conversation can inherit it. */
+  #liveSelection: { contexts: SelectionContext[]; elements: HTMLElement[] } = { contexts: [], elements: [] };
 
   constructor(callbacks: ChatWindowCallbacks) {
     this.#callbacks = callbacks;
+    const storedLayout = readSession(LAYOUT_KEY);
+    this.#layoutChosen = storedLayout === 'fixed' || storedLayout === 'floating';
+    this.#layout = storedLayout === 'fixed' ? 'fixed' : 'floating';
+    this.#dockWidth = clampDockWidth(Number(readSession(DOCK_WIDTH_KEY)) || DOCK_DEFAULT_WIDTH);
+    this.#dockCollapsed = readSession(DOCK_COLLAPSED_KEY) === 'true';
+    this.#pageStyle = document.createElement('style');
+    this.#pageStyle.dataset.astroAi = 'dock-inset';
+
     this.element = document.createElement('div');
     this.element.className = 'ai-chat-windows';
+    this.element.dataset.layout = this.#layout;
+    this.element.dataset.collapsed = String(this.#dockCollapsed);
+
+    const grip = document.createElement('div');
+    grip.className = 'dock-grip';
+    grip.title = 'Resize the chat dock';
+    grip.addEventListener('pointerdown', this.#startDockResize);
+
+    this.#dockHeader = document.createElement('div');
+    this.#dockHeader.className = 'dock-header';
+    this.#tabStrip = document.createElement('div');
+    this.#tabStrip.className = 'dock-tabs';
+    this.#tabStrip.setAttribute('role', 'tablist');
+    this.#tabStrip.setAttribute('aria-label', 'Chat conversations');
+    const dockActions = document.createElement('div');
+    dockActions.className = 'dock-actions';
+    const newChat = dockButton('＋', 'Open another chat', () => {
+      this.create();
+    });
+    this.#dockCollapse = dockButton('−', 'Collapse the chat dock', () => this.toggleDock());
+    dockActions.append(newChat, this.#dockCollapse);
+    this.#dockHeader.append(this.#tabStrip, dockActions);
+    this.#dockHeader.hidden = this.#layout !== 'fixed';
+
+    this.#dockBody = document.createElement('div');
+    this.#dockBody.className = 'dock-body';
+    this.element.append(grip, this.#dockHeader, this.#dockBody);
+
     for (const record of restoreSessions()) this.#mount(record);
     if (this.#drawers.size === 0) {
       this.#mount({ id: DEFAULT_SESSION_ID, title: 'Chat 1' });
@@ -58,10 +140,24 @@ export class ChatWindowManager {
       : this.#order[0];
     if (initialFocus !== undefined) this.focus(initialFocus);
     this.#persist();
+    this.#syncDock();
+    window.addEventListener('resize', this.#onViewportResize);
   }
 
   get size(): number {
     return this.#drawers.size;
+  }
+
+  get layout(): ChatLayout {
+    return this.#layout;
+  }
+
+  get dockCollapsed(): boolean {
+    return this.#dockCollapsed;
+  }
+
+  get dockWidth(): number {
+    return this.#dockWidth;
   }
 
   sessionIds(): string[] {
@@ -79,10 +175,20 @@ export class ChatWindowManager {
   focus(sessionId: string): void {
     const drawer = this.#drawers.get(sessionId);
     if (drawer === undefined) return;
+    const moved = this.#focusedId !== sessionId;
     this.#focusedId = sessionId;
     this.#stack = [...this.#stack.filter((id) => id !== sessionId), sessionId];
     this.#applyLayers();
+    this.#syncTabs();
+    this.#syncDockedVisibility();
     writeSession(FOCUS_KEY, sessionId);
+    // The page selection belongs to whichever conversation is in front. Moving
+    // it here is what stops the live selection from being re-attached to the
+    // window the user just switched to, overwriting what it already held.
+    if (moved && this.#visible) {
+      const { contexts, elements } = drawer.attachedSelection();
+      this.#callbacks.onRestoreSelection?.(contexts, elements);
+    }
   }
 
   /**
@@ -113,8 +219,16 @@ export class ChatWindowManager {
     this.#persist();
     if (this.#provider !== undefined) drawer.setProvider(this.#provider);
     if (this.#history !== undefined) drawer.setHistory(this.#history);
+    // Opening a window while something is selected almost always means talking
+    // about that thing, so the new conversation inherits it. Focusing it then
+    // restores the same selection, which leaves the page untouched instead of
+    // clearing the outline the user just made.
+    if (this.#liveSelection.contexts.length > 0) {
+      drawer.setCurrentSelections(this.#liveSelection.contexts, this.#liveSelection.elements);
+    }
     this.focus(drawer.sessionId);
     if (this.#visible) drawer.open();
+    this.#syncDockedVisibility();
     return drawer;
   }
 
@@ -137,10 +251,71 @@ export class ChatWindowManager {
     // first would only enable an overlay that is about to be torn down.
     if (this.#drawers.size === 0) this.#callbacks.onEmpty();
     else this.#syncSelectionPaused();
+    this.#syncTabs();
+    this.#syncDockedVisibility();
   }
 
   titles(): string[] {
     return this.#order.map((id) => this.#drawers.get(id)?.title ?? '');
+  }
+
+  /**
+   * Moves every conversation between floating windows and the side dock.
+   *
+   * `persist` is false only for the configured default, so a project that
+   * declares `chatLayout` still yields to whatever the user picks afterwards,
+   * and a later config change is not shadowed by a stored value nobody chose.
+   */
+  setLayout(layout: ChatLayout, persist = true): void {
+    if (this.#layout === layout) return;
+    this.#layout = layout;
+    if (persist) {
+      this.#layoutChosen = true;
+      writeSession(LAYOUT_KEY, layout);
+    }
+    this.element.dataset.layout = layout;
+    this.#dockHeader.hidden = layout !== 'fixed';
+    for (const drawer of this.#drawers.values()) drawer.setLayout(layout);
+    this.#syncDock();
+    if (layout === 'floating' && this.#visible) {
+      // Every conversation but one was hidden behind a tab; bring them all back.
+      this.openAll(false, false, false);
+    } else {
+      this.#syncDockedVisibility();
+    }
+    this.#syncSelectionPaused();
+  }
+
+  toggleLayout(): void {
+    this.setLayout(this.#layout === 'fixed' ? 'floating' : 'fixed');
+  }
+
+  /** Applies the layout from `astro.config.mjs`, unless the user chose one first. */
+  setDefaultLayout(layout: ChatLayout | undefined): void {
+    if (layout === undefined || this.#layoutChosen) return;
+    this.setLayout(layout, false);
+  }
+
+  /** Hides the share preview control everywhere when the project turned it off. */
+  setSeoAvailable(available: boolean): void {
+    this.#seoAvailable = available;
+    for (const drawer of this.#drawers.values()) drawer.setSeoAvailable(available);
+  }
+
+  /** Collapses the dock to a rail, handing the page its column back. */
+  toggleDock(collapsed = !this.#dockCollapsed): void {
+    if (this.#layout !== 'fixed' || collapsed === this.#dockCollapsed) return;
+    this.#dockCollapsed = collapsed;
+    writeSession(DOCK_COLLAPSED_KEY, String(collapsed));
+    this.#syncDock();
+    this.#syncDockedVisibility();
+    this.#syncSelectionPaused();
+  }
+
+  setDockWidth(width: number): void {
+    this.#dockWidth = clampDockWidth(width);
+    writeSession(DOCK_WIDTH_KEY, String(this.#dockWidth));
+    this.#syncDock();
   }
 
   setProvider(provider: ServerReadyMessage['agent']): void {
@@ -171,6 +346,7 @@ export class ChatWindowManager {
   setCurrentSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
     // Only the focused window can attach the page selection; the others keep
     // whatever context their own conversation was started with.
+    this.#liveSelection = { contexts: [...contexts], elements: [...elements] };
     this.focused()?.setCurrentSelections(contexts, elements);
   }
 
@@ -183,17 +359,31 @@ export class ChatWindowManager {
   openWithSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
     const drawer = this.focused() ?? this.#drawers.values().next().value;
     drawer?.openWithSelections(contexts, elements);
+    this.#restoreForIncomingContext();
   }
 
   openWithExternalContext(context: AgentExternalContext): void {
     const drawer = this.focused() ?? this.#drawers.values().next().value;
     drawer?.openWithExternalContext(context);
+    this.#restoreForIncomingContext();
+  }
+
+  /**
+   * Context arriving from outside must land somewhere the user can see. A
+   * collapsed dock would otherwise swallow it silently.
+   */
+  #restoreForIncomingContext(): void {
+    if (this.#layout === 'fixed' && this.#dockCollapsed) this.toggleDock(false);
+    this.#syncDockedVisibility();
   }
 
   handleAgentEvent(event: AgentOperationEvent): ChatDrawer | undefined {
     const drawer = this.#drawers.get(event.sessionId ?? DEFAULT_SESSION_ID);
     if (drawer === undefined) return undefined;
     drawer.handleAgentEvent(event);
+    // A background tab is the only sign that an unfocused conversation is
+    // working, so its running marker has to follow the run.
+    this.#syncTabs();
     return drawer;
   }
 
@@ -204,6 +394,9 @@ export class ChatWindowManager {
   /** Drops every window's stale page references after a client-side navigation. */
   handleNavigation(): void {
     for (const drawer of this.#drawers.values()) drawer.handleNavigation();
+    // The swapped body lost the inset rule, which lives in the document head.
+    this.#pageInset = 0;
+    this.#applyPageInset();
   }
 
   /** True once the windows have been shown, so navigation can restore them. */
@@ -216,18 +409,27 @@ export class ChatWindowManager {
     for (const drawer of this.#drawers.values()) {
       drawer.open(focus && drawer === this.focused(), persist, expand);
     }
+    this.#syncDock();
+    this.#syncDockedVisibility();
     this.#syncSelectionPaused();
   }
 
   hideAll(persist = true): void {
     this.#visible = false;
     for (const drawer of this.#drawers.values()) drawer.hide(persist);
+    this.#applyPageInset();
   }
 
   destroy(): void {
+    window.removeEventListener('resize', this.#onViewportResize);
+    window.removeEventListener('pointermove', this.#dockResizeMove);
+    window.removeEventListener('pointerup', this.#endDockResize);
     for (const drawer of this.#drawers.values()) drawer.destroy();
     this.#drawers.clear();
     this.#order = [];
+    this.#visible = false;
+    this.#applyPageInset();
+    this.#pageStyle.remove();
     this.element.remove();
   }
 
@@ -243,26 +445,161 @@ export class ChatWindowManager {
         onNewWindow: () => {
           this.create();
         },
-        onRename: () => this.#persist(),
+        onRename: () => {
+          this.#persist();
+          this.#syncTabs();
+        },
         onFocus: () => this.focus(record.id),
         onMinimizedChange: () => this.#syncSelectionPaused(),
+        ...(this.#callbacks.onOpenSeo === undefined
+          ? {}
+          : { onOpenSeo: () => this.#callbacks.onOpenSeo?.() }),
+        onToggleLayout: () => this.toggleLayout(),
       },
-      { sessionId: record.id, title: record.title, index },
+      { sessionId: record.id, title: record.title, index, layout: this.#layout },
     );
+    drawer.setSeoAvailable(this.#seoAvailable);
     this.#drawers.set(record.id, drawer);
     this.#order.push(record.id);
     this.#stack.push(record.id);
-    this.element.append(drawer.element);
+    this.#dockBody.append(drawer.element);
     drawer.hide(false);
     this.#applyLayers();
+    this.#syncTabs();
     return drawer;
   }
 
+  /** One tab per conversation, rebuilt whenever the set or its state changes. */
+  #syncTabs(): void {
+    const tabs: HTMLElement[] = [];
+    for (const id of this.#order) {
+      const drawer = this.#drawers.get(id);
+      if (drawer === undefined) continue;
+      const selected = id === this.#focusedId;
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'dock-tab';
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(selected));
+      tab.title = drawer.title;
+      tab.addEventListener('click', () => this.focus(id));
+      if (drawer.pendingRequestIds().length > 0) {
+        const running = document.createElement('span');
+        running.className = 'dock-tab-running';
+        running.title = 'This conversation has a run in flight';
+        tab.append(running);
+      }
+      const label = document.createElement('span');
+      label.className = 'dock-tab-label';
+      label.textContent = drawer.title;
+      const close = document.createElement('span');
+      close.className = 'dock-tab-close';
+      close.textContent = '×';
+      close.setAttribute('role', 'button');
+      close.title = `Close ${drawer.title}`;
+      close.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.close(id);
+      });
+      tab.append(label, close);
+      tabs.push(tab);
+    }
+    this.#tabStrip.replaceChildren(...tabs);
+  }
+
+  /** In the dock only the focused conversation is on screen. */
+  #syncDockedVisibility(): void {
+    if (this.#layout !== 'fixed' || !this.#visible) return;
+    for (const [id, drawer] of this.#drawers) {
+      if (id === this.#focusedId) drawer.open(false, false, false);
+      else drawer.hide(false);
+    }
+  }
+
+  #syncDock(): void {
+    const docked = this.#layout === 'fixed';
+    this.element.dataset.collapsed = String(docked && this.#dockCollapsed);
+    this.#dockCollapse.textContent = this.#dockCollapsed ? '✦' : '−';
+    this.#dockCollapse.title = this.#dockCollapsed ? 'Expand the chat dock' : 'Collapse the chat dock';
+    this.#dockCollapse.setAttribute('aria-label', this.#dockCollapse.title);
+    this.#dockCollapse.setAttribute('aria-expanded', String(!this.#dockCollapsed));
+    if (docked) this.element.style.setProperty('--dock-width', `${this.#dockWidth}px`);
+    else this.element.style.removeProperty('--dock-width');
+    this.#applyPageInset();
+  }
+
+  /**
+   * Reflows the page into the column the dock does not occupy.
+   *
+   * A margin on the root element narrows normal flow but cannot move the host
+   * app's own `position: fixed` elements, which are laid out against the
+   * viewport. `--astro-ai-dock-width` is published on the root so an app that
+   * has such elements can offset them itself. On a narrow viewport the dock
+   * becomes a bottom sheet and takes no column at all.
+   */
+  #applyPageInset(): void {
+    const inset = this.#layout === 'fixed' && this.#visible && !isNarrowViewport()
+      ? this.#dockCollapsed ? DOCK_RAIL_WIDTH : this.#dockWidth
+      : 0;
+    if (inset === this.#pageInset && (inset === 0 || this.#pageStyle.isConnected)) return;
+    this.#pageInset = inset;
+    if (inset === 0) {
+      this.#pageStyle.remove();
+      document.documentElement.style.removeProperty('--astro-ai-dock-width');
+    } else {
+      document.documentElement.style.setProperty('--astro-ai-dock-width', `${inset}px`);
+      this.#pageStyle.textContent = `html { margin-right: ${inset}px !important; }`;
+      if (!this.#pageStyle.isConnected) document.head.append(this.#pageStyle);
+    }
+    this.#notifyPageReflow();
+  }
+
+  /**
+   * Changing the inset reflows the page without firing a scroll or resize
+   * event, so every outline, insertion control, and selection arrow is left
+   * measured against a layout that no longer exists. Nothing else will tell
+   * them, so the dock does.
+   */
+  #notifyPageReflow(): void {
+    this.#callbacks.onPageReflow?.();
+    for (const drawer of this.#drawers.values()) drawer.refreshConnector();
+  }
+
+  readonly #onViewportResize = (): void => {
+    // Crossing the narrow breakpoint turns the column into a bottom sheet.
+    this.#applyPageInset();
+  };
+
+  readonly #startDockResize = (event: PointerEvent): void => {
+    if (event.button !== 0 || this.#layout !== 'fixed' || this.#dockCollapsed) return;
+    event.preventDefault();
+    this.#dockResizeFrom = { pointer: event.clientX, width: this.#dockWidth };
+    this.element.dataset.resizing = 'true';
+    window.addEventListener('pointermove', this.#dockResizeMove);
+    window.addEventListener('pointerup', this.#endDockResize, { once: true });
+  };
+
+  readonly #dockResizeMove = (event: PointerEvent): void => {
+    const from = this.#dockResizeFrom;
+    if (from === undefined) return;
+    this.setDockWidth(from.width + (from.pointer - event.clientX));
+  };
+
+  readonly #endDockResize = (): void => {
+    this.#dockResizeFrom = undefined;
+    this.element.dataset.resizing = 'false';
+    window.removeEventListener('pointermove', this.#dockResizeMove);
+    window.removeEventListener('pointerup', this.#endDockResize);
+  };
+
   #syncSelectionPaused(): void {
     const drawers = [...this.#drawers.values()];
-    this.#callbacks.onSelectionPaused(
-      drawers.length > 0 && drawers.every((drawer) => drawer.minimized),
-    );
+    // A collapsed dock hides every conversation at once, which is the docked
+    // equivalent of collapsing every floating window.
+    const paused = this.#layout === 'fixed'
+      ? this.#dockCollapsed
+      : drawers.length > 0 && drawers.every((drawer) => drawer.minimized);
+    this.#callbacks.onSelectionPaused(paused);
   }
 
   #persist(): void {
@@ -273,6 +610,14 @@ export class ChatWindowManager {
       ),
     );
   }
+}
+
+export function clampDockWidth(width: number): number {
+  if (!Number.isFinite(width)) return DOCK_DEFAULT_WIDTH;
+  const ceiling = typeof window === 'undefined'
+    ? DOCK_MAX_WIDTH
+    : Math.min(DOCK_MAX_WIDTH, Math.max(DOCK_MIN_WIDTH, window.innerWidth - 200));
+  return Math.round(Math.min(Math.max(width, DOCK_MIN_WIDTH), ceiling));
 }
 
 export function nextChatWindowTitle(existing: readonly string[]): string {
@@ -308,6 +653,17 @@ export function parseSessionRecords(value: string | null): ChatSessionRecord[] {
     if (records.length >= MAX_CHAT_WINDOWS) break;
   }
   return records;
+}
+
+function dockButton(label: string, title: string, onClick: () => void): HTMLButtonElement {
+  const node = document.createElement('button');
+  node.type = 'button';
+  node.className = 'icon-button';
+  node.textContent = label;
+  node.title = title;
+  node.setAttribute('aria-label', title);
+  node.addEventListener('click', onClick);
+  return node;
 }
 
 function restoreSessions(): ChatSessionRecord[] {

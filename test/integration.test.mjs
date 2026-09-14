@@ -331,3 +331,58 @@ test('tags every agent event with the chat window that started the run', async (
   // session must never warn on its own.
   assert.deepEqual(warnings, ['No CLI agent provider is configured.']);
 });
+
+/** Drives one integration through both setup hooks and returns what it sent. */
+async function readyPayload(options) {
+  const listeners = new Map();
+  const sent = [];
+  const errors = [];
+  const integration = buildWithAI(options);
+
+  integration.hooks['astro:config:setup']({
+    config: { root: new URL('../', import.meta.url) },
+    command: 'dev',
+    addDevToolbarApp() {},
+    updateConfig(config) { return config; },
+    logger: { error(message) { errors.push(message); }, warn() {}, debug() {} },
+  });
+  integration.hooks['astro:server:setup']({
+    toolbar: {
+      on(event, callback) { listeners.set(event, callback); },
+      send(event, payload) { sent.push([event, payload]); },
+    },
+    logger: { warn() {}, debug() {}, error(message) { errors.push(message); } },
+  });
+
+  await listeners.get(CLIENT_EVENTS.ready)({ protocolVersion: PROTOCOL_VERSION, route: '/' });
+  const ready = sent.find(([event]) => event === SERVER_EVENTS.ready)?.[1];
+  return { ready, errors };
+}
+
+test('carries the configured editor defaults to the toolbar', async () => {
+  const configured = await readyPayload({
+    chatLayout: 'fixed',
+    seo: { networks: ['x', 'google'] },
+  });
+  assert.deepEqual(configured.errors, []);
+  assert.equal(configured.ready.chatLayout, 'fixed');
+  assert.deepEqual(configured.ready.seo, { networks: ['x', 'google'] });
+
+  // Nothing configured means nothing sent, so the toolbar keeps its own defaults.
+  const bare = await readyPayload({});
+  assert.equal('chatLayout' in bare.ready, false);
+  assert.equal('seo' in bare.ready, false);
+
+  const off = await readyPayload({ seo: false });
+  assert.equal(off.ready.seo, false);
+});
+
+test('reports a bad editor default and keeps the dev server usable', async () => {
+  const badNetwork = await readyPayload({ seo: { networks: ['twitter'] } });
+  assert.match(badNetwork.errors.join('\n'), /unknown network "twitter"/);
+  assert.equal('seo' in badNetwork.ready, false, 'the preview falls back to its defaults');
+
+  const badLayout = await readyPayload({ chatLayout: 'docked' });
+  assert.match(badLayout.errors.join('\n'), /must be 'floating' or 'fixed'/);
+  assert.equal('chatLayout' in badLayout.ready, false);
+});

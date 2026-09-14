@@ -29,6 +29,8 @@ export default defineConfig({
 | `excludeDirectories` | `string[]` | see below |
 | `maxRecoveryFiles` | `number` | `20` |
 | `allowNetworkAgent` | `boolean` | `false` |
+| `chatLayout` | `'floating' \| 'fixed'` | `'floating'` |
+| `seo` | `object \| false` | all networks |
 
 Nothing is required. `buildWithAI()` with no arguments gives you selection,
 inspection, literal text and prop editing, reordering, insertion, removal, undo
@@ -222,6 +224,60 @@ buildWithAI({ agent: 'codex', allowNetworkAgent: true });
 
 Credentials always stay in the CLI's own credential store and are never sent to
 browser code.
+
+## `chatLayout`
+
+Which layout the chat opens in.
+
+```js
+buildWithAI({ chatLayout: 'fixed' });
+```
+
+`'floating'` puts each conversation in its own window over the page. `'fixed'`
+docks them all into a column on the right, with tabs across the conversations,
+and reflows the page into the remaining width.
+
+This is a starting point, not a lock. The **⇥** and **⇤** buttons switch layouts
+at any time, and the toolbar remembers that choice for the rest of the session —
+after which this setting stops applying, so you can change the project default
+without overriding anyone mid-session.
+
+Docking reflows normal flow with a margin on the root element, which cannot move
+your app's own `position: fixed` elements. The dock publishes its width as
+`--astro-ai-dock-width` on the root so you can offset them:
+
+```css
+.my-fixed-header {
+  right: var(--astro-ai-dock-width, 0px);
+}
+```
+
+Below 720px the dock becomes a bottom sheet and takes no column at all.
+
+## `seo`
+
+The share preview — the full-screen sheet behind the green **SEO** button —
+needs no configuration. It reads the head of whatever page you are on, every
+time you open it, so there is nothing here to describe your content.
+
+The only setting is which cards to draw:
+
+```js
+buildWithAI({
+  seo: { networks: ['x', 'linkedin', 'google', 'slack'] },
+});
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `networks` | `SeoNetworkId[]` | Which cards to render, in the order given. All eight when omitted. |
+
+Valid network names are `x`, `facebook`, `linkedin`, `instagram`, `discord`,
+`slack`, `whatsapp` and `google`. An unknown name is reported at startup and the
+preview falls back to showing all of them, rather than silently rendering one
+card fewer.
+
+`seo: false` hides the button entirely.
 
 ## Recipes
 

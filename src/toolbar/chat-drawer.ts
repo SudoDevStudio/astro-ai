@@ -36,6 +36,10 @@ export type ChatDrawerCallbacks = {
   onRename?(title: string): void;
   onFocus?(): void;
   onMinimizedChange?(minimized: boolean): void;
+  /** Opens the share preview for the current route. */
+  onOpenSeo?(): void;
+  /** Switches every window between floating and docked. */
+  onToggleLayout?(): void;
 };
 
 export type ChatDrawerOptions = {
@@ -43,6 +47,7 @@ export type ChatDrawerOptions = {
   title: string;
   /** Cascade offset applied when this window has no saved position. */
   index?: number;
+  layout?: ChatLayout;
 };
 
 type RunView = {
@@ -71,6 +76,12 @@ type PersistedRun = {
 };
 
 type SelectionAnchor = Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom' | 'width' | 'height'>;
+/**
+ * `floating` windows own their position on the page. `fixed` windows are laid
+ * out by the dock, which owns one column and switches between conversations
+ * with tabs, so the window itself stops tracking position and size entirely.
+ */
+export type ChatLayout = 'floating' | 'fixed';
 type ChatWindowPosition = { left: number; top: number };
 type ChatWindowSize = { width: number; height: number };
 type FileAttachmentSummary = Pick<AgentFileAttachment, 'name' | 'size' | 'mediaType'>;
@@ -128,9 +139,12 @@ export class ChatDrawer {
   readonly #providerBadge: HTMLSpanElement;
   readonly #toolbar: HTMLDivElement;
   readonly #notice: HTMLSpanElement;
+  readonly #noticeText: HTMLSpanElement;
   readonly #undo: HTMLButtonElement;
   readonly #redo: HTMLButtonElement;
   readonly #collapse: HTMLButtonElement;
+  readonly #seo: HTMLButtonElement;
+  readonly #layoutToggle: HTMLButtonElement;
   readonly #connector: SVGSVGElement;
   readonly #connectorPath: SVGPathElement;
   readonly #drawerResizeObserver: ResizeObserver;
@@ -140,6 +154,12 @@ export class ChatDrawer {
   #currentSelectionElements: HTMLElement[] = [];
   #attachmentElements: HTMLElement[] = [];
   #attachments: SelectionAttachment[] = [];
+  /**
+   * The full contexts behind `#attachments`. The attachments themselves are
+   * trimmed for the wire, but restoring this conversation's selection onto the
+   * page needs everything the overlay was given in the first place.
+   */
+  #attachedContexts: SelectionContext[] = [];
   #files: AgentFileAttachment[] = [];
   #externalContext: AgentExternalContext | undefined;
   #locked = false;
@@ -155,6 +175,7 @@ export class ChatDrawer {
   #position: ChatWindowPosition | undefined;
   #dragOffset: ChatWindowPosition | undefined;
   #resizeBounds: { right: number; bottom: number } | undefined;
+  #layout: ChatLayout;
 
   constructor(callbacks: ChatDrawerCallbacks, options: ChatDrawerOptions) {
     this.#callbacks = callbacks;
@@ -174,10 +195,14 @@ export class ChatDrawer {
     this.#minimized = this.#read(DRAWER_MINIMIZED_KEY) === 'true';
     this.#answerOnly = this.#read(DRAWER_MODE_KEY) === 'true';
     this.#position = this.#readJson<ChatWindowPosition>(DRAWER_POSITION_KEY);
+    this.#layout = options.layout ?? 'floating';
+    // A docked window is laid out by the dock and never collapses on its own.
+    if (this.#layout === 'fixed') this.#minimized = false;
     this.element = document.createElement('aside');
     this.element.className = 'ai-chat-drawer';
     this.element.setAttribute('aria-label', `Build with AI chat · ${options.title}`);
     this.element.dataset.sessionId = options.sessionId;
+    this.element.dataset.layout = this.#layout;
     this.element.dataset.minimized = String(this.#minimized);
     this.element.addEventListener('pointerdown', () => this.#callbacks.onFocus?.(), true);
 
@@ -191,7 +216,7 @@ export class ChatDrawer {
     const identity = element('div', 'drawer-identity');
     const mark = element('span', 'agent-mark');
     mark.textContent = '✦';
-    const titles = document.createElement('div');
+    const titles = element('div', 'drawer-titles');
     const eyebrow = element('span', 'drawer-eyebrow');
     eyebrow.textContent = 'Build with AI';
     this.#titleInput = document.createElement('input');
@@ -217,6 +242,7 @@ export class ChatDrawer {
     newWindow.hidden = callbacks.onNewWindow === undefined;
     this.#collapse = iconButton('−', 'Collapse chat window', () => this.toggleCollapsed());
     this.#collapse.classList.add('collapse-button');
+    this.#collapse.hidden = this.#layout === 'fixed';
     const close = iconButton('×', 'Close this chat window', () => this.#callbacks.onClose());
     close.classList.add('close-button');
     headerActions.append(this.#providerBadge, newWindow, this.#collapse, close);
@@ -233,10 +259,34 @@ export class ChatDrawer {
     historyActions.append(this.#undo, this.#redo);
     this.#notice = element('span', 'drawer-notice');
     this.#notice.dataset.state = 'ready';
-    this.#notice.textContent = 'Click to select · Shift-click to add · drag to marquee';
+    // The status text lives in its own element so it can be truncated. Ellipsis
+    // does not apply to a flex container, and this one holds the status dot, so
+    // without the inner span a long notice pushes the controls out of the panel
+    // instead of trailing off.
+    this.#noticeText = element('span', 'notice-text');
+    this.#noticeText.textContent = 'Click to select · Shift-click to add · drag to marquee';
+    this.#notice.append(this.#noticeText);
     this.#notice.setAttribute('role', 'status');
     this.#notice.setAttribute('aria-live', 'polite');
-    this.#toolbar.append(historyActions, this.#notice);
+    // Both of these carry a word rather than a glyph alone. They open features
+    // nobody goes looking for, so an unlabelled icon is a feature nobody finds.
+    const tools = element('div', 'drawer-tools');
+    const seo = toolButton(
+      '◉',
+      'SEO',
+      'Preview this page as a shared link on X, Facebook, Google and more',
+      () => this.#callbacks.onOpenSeo?.(),
+    );
+    seo.classList.add('seo-button');
+    seo.hidden = callbacks.onOpenSeo === undefined;
+    this.#seo = seo;
+    this.#layoutToggle = toolButton('⇥', 'Dock', 'Dock the chat into a side column', () =>
+      this.#callbacks.onToggleLayout?.());
+    this.#layoutToggle.classList.add('layout-button');
+    this.#layoutToggle.hidden = callbacks.onToggleLayout === undefined;
+    this.#syncLayoutToggle();
+    tools.append(seo, this.#layoutToggle);
+    this.#toolbar.append(historyActions, this.#notice, tools);
 
     this.#body = element('div', 'drawer-body');
     this.#context = element('div', 'chat-context');
@@ -345,6 +395,55 @@ export class ChatDrawer {
 
   get minimized(): boolean {
     return this.#minimized;
+  }
+
+  get layout(): ChatLayout {
+    return this.#layout;
+  }
+
+  /** Hides the share preview control when the project switched the feature off. */
+  setSeoAvailable(available: boolean): void {
+    this.#seo.hidden = !available || this.#callbacks.onOpenSeo === undefined;
+  }
+
+  /**
+   * Hands position and size to the dock, or takes them back. Nothing about the
+   * conversation changes — only who decides where the window sits — so a run in
+   * flight survives the switch.
+   */
+  setLayout(layout: ChatLayout): void {
+    if (this.#layout === layout) return;
+    this.#layout = layout;
+    this.element.dataset.layout = layout;
+    this.#collapse.hidden = layout === 'fixed';
+    this.#syncLayoutToggle();
+    if (layout === 'fixed') {
+      for (const property of ['left', 'top', 'right', 'bottom', 'width', 'height']) {
+        this.element.style.removeProperty(property);
+      }
+      // The dock has one collapse control for the column; an individual window
+      // staying collapsed inside it would leave a tab that opens onto nothing.
+      // The stored value is left alone so floating mode restores it.
+      this.#setMinimized(false, false, false);
+    } else {
+      this.#setMinimized(this.#read(DRAWER_MINIMIZED_KEY) === 'true', false, false);
+      if (this.#position !== undefined) this.#applyPosition(this.#position);
+      requestAnimationFrame(() => this.#recoverPosition());
+    }
+    this.#scheduleConnector();
+  }
+
+  #syncLayoutToggle(): void {
+    const docked = this.#layout === 'fixed';
+    setToolButton(
+      this.#layoutToggle,
+      docked ? '⇤' : '⇥',
+      docked ? 'Float' : 'Dock',
+      docked
+        ? 'Float the chat windows over the page'
+        : 'Dock the chat into a side column, with tabs across conversations',
+    );
+    this.#layoutToggle.setAttribute('aria-pressed', String(docked));
   }
 
   rename(title: string): void {
@@ -498,6 +597,8 @@ export class ChatDrawer {
       this.#externalContext = undefined;
       if (!this.#locked) {
         this.#attachments = contexts.map(createSelectionAttachment);
+        this.#attachedContexts = [...contexts];
+        this.#attachmentElements = [...elements];
       }
     }
     this.#renderContext();
@@ -526,7 +627,9 @@ export class ChatDrawer {
 
   setNotice(message: string, error = false): void {
     this.#notice.dataset.state = error ? 'error' : 'ready';
-    this.#notice.textContent = message;
+    this.#noticeText.textContent = message;
+    // The full text stays reachable when the panel is too narrow to show it.
+    this.#notice.title = message;
   }
 
   openWithSelections(contexts: SelectionContext[], elements: readonly HTMLElement[] = []): void {
@@ -535,6 +638,7 @@ export class ChatDrawer {
     // Choosing Ask AI on an element is an explicit attachment choice and must
     // replace stale drawer context, even if an older attachment was locked.
     this.#attachments = contexts.map(createSelectionAttachment);
+    this.#attachedContexts = [...contexts];
     this.#attachmentElements = [...elements];
     this.#externalContext = undefined;
     this.#locked = false;
@@ -545,6 +649,7 @@ export class ChatDrawer {
     this.#currentSelections = [];
     this.#currentSelectionElements = [];
     this.#attachments = [];
+    this.#attachedContexts = [];
     this.#attachmentElements = [];
     this.#externalContext = { ...context };
     this.#locked = false;
@@ -552,7 +657,9 @@ export class ChatDrawer {
     this.open();
     this.#input.value = context.kind === 'error'
       ? 'Fix this development error.'
-      : 'Fix this audit issue.';
+      : context.kind === 'seo'
+        ? 'Fix these share preview issues in the head metadata for this route.'
+        : 'Fix this audit issue.';
     this.#syncComposer();
   }
 
@@ -565,6 +672,7 @@ export class ChatDrawer {
     this.#currentSelections = [];
     this.#currentSelectionElements = [];
     this.#attachments = [];
+    this.#attachedContexts = [];
     this.#attachmentElements = [];
     this.#locked = false;
     this.#selectionAnchor = undefined;
@@ -601,7 +709,7 @@ export class ChatDrawer {
    * already known bad, and the default corner is known good.
    */
   #recoverPosition(): void {
-    if (this.element.hidden) return;
+    if (this.element.hidden || this.#layout === 'fixed') return;
     const rect = this.element.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     if (this.#position !== undefined && !intersectsViewport(rect)) {
@@ -623,6 +731,7 @@ export class ChatDrawer {
    */
   #applyCascade(): void {
     if (this.#position !== undefined || this.#index === 0 || this.element.hidden) return;
+    if (this.#layout === 'fixed') return;
     const rect = this.element.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const offset = this.#index * WINDOW_CASCADE_STEP;
@@ -637,6 +746,7 @@ export class ChatDrawer {
   }
 
   toggleCollapsed(): void {
+    if (this.#layout === 'fixed') return;
     this.#setMinimized(!this.#minimized);
   }
 
@@ -754,6 +864,29 @@ export class ChatDrawer {
    * id on every instance — so this takes only the first match per id. Spanning
    * every repetition would put the arrow in the empty middle of the group.
    */
+  /**
+   * The selection this conversation owns, re-resolved against the live page.
+   *
+   * Focusing a window restores this onto the page, so it has to survive an HMR
+   * re-render: elements that are gone are looked up again by node id, and a
+   * context whose element cannot be found is dropped rather than restored onto
+   * nothing.
+   */
+  attachedSelection(): { contexts: SelectionContext[]; elements: HTMLElement[] } {
+    if (this.#attachedContexts.length === 0) return { contexts: [], elements: [] };
+    const live = this.#attachmentElements.filter((node) => node.isConnected);
+    const resolved = live.length === this.#attachedContexts.length ? live : this.#attachmentsById();
+    const contexts: SelectionContext[] = [];
+    const elements: HTMLElement[] = [];
+    for (const [index, context] of this.#attachedContexts.entries()) {
+      const element = resolved[index];
+      if (element === undefined || !element.isConnected) continue;
+      contexts.push(context);
+      elements.push(element);
+    }
+    return { contexts, elements };
+  }
+
   #attachmentsById(): HTMLElement[] {
     const wanted = new Set(this.#attachments.map(({ nodeId }) => nodeId));
     const first = new Map<string, HTMLElement>();
@@ -821,7 +954,7 @@ export class ChatDrawer {
     const label = element('div', 'context-label');
     if (this.#externalContext !== undefined) {
       const tag = element('span', 'tag-pill');
-      tag.textContent = this.#externalContext.kind === 'error' ? 'Error' : 'Audit';
+      tag.textContent = externalContextLabel(this.#externalContext.kind);
       const source = document.createElement('span');
       source.textContent = this.#externalContext.file === undefined
         ? this.#externalContext.title
@@ -860,6 +993,7 @@ export class ChatDrawer {
       const useCurrent = iconButton('↻', 'Replace with current selection', () => {
         if (this.#currentSelections.length === 0 || this.#locked) return;
         this.#attachments = this.#currentSelections.map(createSelectionAttachment);
+        this.#attachedContexts = [...this.#currentSelections];
         this.#attachmentElements = [...this.#currentSelectionElements];
         this.#renderContext();
       });
@@ -935,7 +1069,7 @@ export class ChatDrawer {
     userText.textContent = instruction;
     const scope = element('span', 'message-scope');
     const sourceScope = externalContext !== undefined
-      ? `${externalContext.kind === 'error' ? 'Error' : 'Audit'} · ${externalContext.file ?? externalContext.title}`
+      ? `${externalContextLabel(externalContext.kind)} · ${externalContext.file ?? externalContext.title}`
       : attachments === undefined || attachments.length === 0
         ? 'Page-level'
         : attachments.length === 1 && attachments[0] !== undefined
@@ -1189,7 +1323,7 @@ export class ChatDrawer {
   };
 
   readonly #startDrag = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || this.#layout === 'fixed') return;
     const target = event.target;
     if (target instanceof Element && target.closest('button, input, textarea, a, select') !== null) {
       return;
@@ -1237,7 +1371,7 @@ export class ChatDrawer {
   };
 
   readonly #startResize = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || this.#layout === 'fixed') return;
     event.preventDefault();
     const rect = this.element.getBoundingClientRect();
     this.#position = { left: rect.left, top: rect.top };
@@ -1294,7 +1428,7 @@ export class ChatDrawer {
    * you cannot see is a chat you cannot close.
    */
   #constrainPosition(): void {
-    if (this.element.hidden) return;
+    if (this.element.hidden || this.#layout === 'fixed') return;
     const rect = this.element.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const margin = isNarrowViewport() ? 0 : 8;
@@ -1325,6 +1459,10 @@ export function isSendShortcut(
   return event.key === 'Enter' && !event.shiftKey && !event.isComposing;
 }
 
+export function externalContextLabel(kind: AgentExternalContext['kind']): string {
+  return kind === 'error' ? 'Error' : kind === 'seo' ? 'SEO' : 'Audit';
+}
+
 export function chatWindowCollapseControl(minimized: boolean): {
   symbol: '✦' | '−';
   label: 'Expand chat window' | 'Collapse chat window';
@@ -1350,12 +1488,23 @@ export function constrainChatWindowPosition(
 export function createChatDrawerStyle(): HTMLStyleElement {
   const style = document.createElement('style');
   style.textContent = `
-    .ai-chat-drawer { --accent: #8b5cf6; background: #0e1117; border: 1px solid #343c49; border-radius: 14px; bottom: 16px; box-shadow: -12px 18px 60px rgb(0 0 0 / .42); box-sizing: border-box; color: #f8fafc; display: grid; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; grid-template-rows: auto auto 1fr; height: min(760px, calc(100vh - 32px)); max-height: 760px; overflow: hidden; position: fixed; right: 16px; top: 16px; width: min(460px, calc(100vw - 32px)); z-index: ${EDITOR_LAYERS.chatWindowTop}; }
+    .ai-chat-drawer { --accent: #8b5cf6; background: #0e1117; border: 1px solid #343c49; border-radius: 14px; bottom: 16px; box-shadow: -12px 18px 60px rgb(0 0 0 / .42); box-sizing: border-box; color: #f8fafc; container-type: inline-size; display: grid; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; grid-template-rows: auto auto 1fr; height: min(760px, calc(100vh - 32px)); max-height: 760px; overflow: hidden; position: fixed; right: 16px; top: 16px; width: min(460px, calc(100vw - 32px)); z-index: ${EDITOR_LAYERS.chatWindowTop}; }
     .ai-chat-drawer[hidden] { display: none; }
+    /*
+      Every row is a grid item, and a grid item's default \`min-width: auto\`
+      refuses to shrink below its min-content width — it overflows its track
+      instead, where the panel's \`overflow: hidden\` clips whatever sits at the
+      end of the row. That is how the Dock button disappeared. Letting the rows
+      shrink to their track hands the decision back to the flex rules inside
+      them, which already trim text before controls.
+    */
+    .drawer-header, .drawer-toolbar, .drawer-body, .chat-context, .chat-messages, .chat-composer { min-width: 0; }
     .ai-chat-drawer[data-context='page'] { --accent: #c084fc; background: linear-gradient(165deg, #24143b 0%, #151324 52%, #10131a 100%); border-color: #6d4bb0; }
     .ai-chat-drawer[data-context='selection'] { background: linear-gradient(165deg, #111827 0%, #0e1117 42%); border-color: #6d5ac7; }
     .ai-chat-drawer[data-context='error'] { --accent: #fb7185; background: linear-gradient(165deg, #32151d 0%, #171116 48%, #0e1117 100%); border-color: #9f3949; }
     .ai-chat-drawer[data-context='audit'] { --accent: #fbbf24; background: linear-gradient(165deg, #30230f 0%, #19160f 48%, #0e1117 100%); border-color: #8a6622; }
+    .ai-chat-drawer[data-context='seo'] { --accent: #22d3ee; background: linear-gradient(165deg, #0c2b33 0%, #101c22 48%, #0e1117 100%); border-color: #1e6a7d; }
+    .ai-chat-drawer[data-context='seo'] .tag-pill { background: #0e4a5a; border-color: #22d3ee; color: #cffafe; }
     .ai-chat-drawer[data-minimized='true'] { border: 0; border-radius: 15px; bottom: auto; box-shadow: 0 12px 34px rgb(0 0 0 / .4); grid-template-rows: auto; height: 56px; min-height: 56px; overflow: visible; right: 16px; top: 16px; width: 56px; }
     .ai-chat-drawer[data-minimized='true'] .drawer-header { border: 0; min-height: 56px; padding: 0; }
     .ai-chat-drawer[data-minimized='true'] .drawer-identity, .ai-chat-drawer[data-minimized='true'] .provider-badge, .ai-chat-drawer[data-minimized='true'] .close-button { display: none; }
@@ -1367,9 +1516,14 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .drawer-header { align-items: center; border-bottom: 1px solid #292f3a; cursor: grab; display: flex; justify-content: space-between; min-height: 62px; padding: 0 16px; touch-action: none; user-select: none; }
     .ai-chat-drawer[data-dragging='true'] .drawer-header { cursor: grabbing; }
     .drawer-identity, .drawer-header-actions, .history-actions, .context-label, .context-controls, .composer-actions, .run-header { align-items: center; display: flex; }
-    .drawer-identity { gap: 10px; }
+    /* Text gives way before controls do: a panel too narrow for everything
+       must trim the name, the status, and the provider label rather than push
+       a button past its edge, where overflow:hidden would swallow it. */
+    .drawer-identity { flex: 1 1 auto; gap: 10px; min-width: 0; }
+    .drawer-titles { min-width: 0; }
     .agent-mark { align-items: center; background: linear-gradient(135deg, #7c3aed, #a78bfa); border-radius: 8px; display: flex; font-size: 14px; height: 30px; justify-content: center; width: 30px; }
-    .drawer-eyebrow { color: #929bab; display: block; font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+    .drawer-eyebrow { color: #929bab; display: block; font-size: 9px; font-weight: 700; letter-spacing: .11em; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+    .agent-mark { flex: 0 0 auto; }
     .drawer-header h2 { font-size: 14px; line-height: 1.2; margin: 2px 0 0; }
     .drawer-title { background: transparent; border: 1px solid transparent; border-radius: 5px; color: inherit; font: 600 14px/1.2 inherit; margin: 1px 0 0; max-width: 190px; padding: 1px 4px; width: 100%; }
     .drawer-title:hover { border-color: #3a4250; }
@@ -1377,15 +1531,51 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .ai-chat-drawer[data-focused='false'] { opacity: .94; }
     .ai-chat-drawer[data-focused='false'] .drawer-header { filter: saturate(.75); }
     .ai-chat-drawer[data-minimized='true'] .new-window-button { display: none; }
-    .drawer-header-actions { gap: 8px; }
-    .provider-badge { background: #202631; border: 1px solid #343c49; border-radius: 999px; color: #aeb7c5; font-size: 10px; padding: 4px 8px; }
+    .drawer-header-actions { flex: 0 0 auto; gap: 8px; }
+    .drawer-header-actions .icon-button, .history-actions .history-button { flex: 0 0 auto; }
+    .drawer-tools { align-items: center; display: flex; flex: 0 0 auto; gap: 6px; }
+    .tool-button { align-items: center; border-radius: 7px; display: flex; flex: 0 0 auto; font-size: 11px; font-weight: 700; gap: 5px; padding: 5px 9px; white-space: nowrap; }
+    .tool-icon { font-size: 12px; line-height: 1; }
+    .seo-button { background: #15803d; border-color: #22c55e; color: #f0fdf4; }
+    .seo-button:hover:not(:disabled) { background: #16a34a; border-color: #4ade80; }
+    .layout-button { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
+    .layout-button:hover:not(:disabled) { background: #1d4ed8; border-color: #60a5fa; }
+    .layout-button[aria-pressed='true'] { background: #0e4a5a; border-color: #22d3ee; color: #cffafe; }
+    .layout-button[aria-pressed='true']:hover:not(:disabled) { background: #14607a; border-color: #67e8f9; }
+
+    .ai-chat-windows[data-layout='fixed'] { background: #0b0e14; border-left: 1px solid #343c49; bottom: 0; box-shadow: -18px 0 50px rgb(0 0 0 / .4); box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr); position: fixed; right: 0; top: 0; width: var(--dock-width, 420px); z-index: ${EDITOR_LAYERS.chatWindowTop}; }
+    .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] { width: 44px; }
+    .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-tabs, .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-body { display: none; }
+    .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-header { border-bottom: 0; flex-direction: column; height: 100%; padding: 8px 0; }
+    .dock-header { align-items: center; background: #10141a; border-bottom: 1px solid #292f3a; display: flex; gap: 6px; justify-content: space-between; padding: 6px 8px; }
+    .dock-tabs { display: flex; flex: 1 1 auto; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+    .dock-tabs::-webkit-scrollbar { display: none; }
+    .dock-tab { align-items: center; background: #161b23; border: 1px solid #2a313c; border-radius: 7px; color: #9ca3af; display: flex; flex: 0 0 auto; font: 11px/1.2 inherit; gap: 6px; max-width: 168px; padding: 5px 6px 5px 9px; }
+    .dock-tab:hover:not(:disabled) { background: #1d2430; border-color: #3c4451; color: #e5e7eb; }
+    .dock-tab[aria-selected='true'] { background: #2a2350; border-color: #7668c8; color: #ede9fe; }
+    .dock-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dock-tab-running { animation: agent-pulse 1.2s ease-in-out infinite; background: #a78bfa; border-radius: 50%; flex: 0 0 5px; height: 5px; width: 5px; }
+    .dock-tab-close { background: transparent; border: 0; border-radius: 4px; color: #6b7280; flex: 0 0 auto; font-size: 13px; line-height: 1; padding: 1px 3px; }
+    .dock-tab-close:hover:not(:disabled) { background: #3f2230; color: #fda4af; }
+    .dock-actions { align-items: center; display: flex; flex: 0 0 auto; gap: 4px; }
+    .dock-grip { bottom: 0; cursor: ew-resize; left: -5px; position: absolute; top: 0; width: 10px; }
+    .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-grip { display: none; }
+    .dock-body { display: contents; }
+    .ai-chat-windows[data-layout='fixed'] .dock-body { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+    .ai-chat-windows:not([data-layout='fixed']) .dock-header, .ai-chat-windows:not([data-layout='fixed']) .dock-grip { display: none; }
+    .ai-chat-drawer[data-layout='fixed'] { border: 0; border-radius: 0; bottom: auto; box-shadow: none; height: 100%; left: auto; max-height: none; min-height: 0; position: relative; right: auto; top: auto; width: 100%; z-index: auto !important; }
+    .ai-chat-drawer[data-layout='fixed'] .drawer-resize, .ai-chat-drawer[data-layout='fixed'] .new-window-button { display: none; }
+    .ai-chat-drawer[data-layout='fixed'] .drawer-header { cursor: default; min-height: 54px; }
+    .ai-chat-drawer[data-layout='fixed'][data-focused='false'] { opacity: 1; }
+    .provider-badge { background: #202631; border: 1px solid #343c49; border-radius: 999px; color: #aeb7c5; flex: 0 1 auto; font-size: 10px; min-width: 0; overflow: hidden; padding: 4px 8px; text-overflow: ellipsis; white-space: nowrap; }
     .provider-badge[data-state='connected'] { background: #102c22; border-color: #225b45; color: #86efac; }
     .provider-badge[data-state='offline'] { background: #35191d; border-color: #713039; color: #fda4af; }
     .drawer-toolbar { align-items: center; background: #10141a; border-bottom: 1px solid #292f3a; display: flex; gap: 12px; justify-content: space-between; min-height: 42px; padding: 0 14px; }
-    .history-actions { gap: 6px; }
+    .history-actions { flex: 0 0 auto; gap: 6px; }
     .history-button { font-size: 11px; padding: 5px 9px; }
-    .drawer-notice { align-items: center; color: #9ca3af; display: flex; font-size: 10px; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .drawer-notice { align-items: center; color: #9ca3af; display: flex; flex: 1 1 auto; font-size: 10px; gap: 6px; min-width: 0; overflow: hidden; }
     .drawer-notice::before { background: #22c55e; border-radius: 999px; content: ''; flex: 0 0 6px; height: 6px; width: 6px; }
+    .notice-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .drawer-notice[data-state='error'] { color: #fda4af; }
     .drawer-notice[data-state='error']::before { background: #ef4444; }
     .drawer-body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; }
@@ -1466,6 +1656,20 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .mode-button { color: #c4b5fd; white-space: nowrap; }
     .mode-button[aria-pressed='true'] { background: #312e81; border-color: #7c3aed; color: #ede9fe; }
     .attach-button { font-size: 13px; }
+    /*
+      The last resort for a panel narrower than its own toolbar: the controls
+      drop their words and keep their icons. A button that reads ◉ is worse
+      than one that reads ◉ SEO, but both are better than one that has been
+      pushed off the edge, and the tooltip still says what it does.
+    */
+    @container (max-width: 400px) {
+      .tool-label { display: none; }
+      .tool-button { padding: 5px 7px; }
+      .history-button { padding: 5px 7px; }
+    }
+    @container (max-width: 320px) {
+      .provider-badge, .drawer-eyebrow { display: none; }
+    }
     @keyframes agent-spin { to { transform: rotate(360deg); } }
     @keyframes agent-pulse { 50% { opacity: .35; transform: scale(.75); } }
     @media (prefers-reduced-motion: reduce) { .run-icon, .step-dot { animation: none !important; } }
@@ -1474,6 +1678,13 @@ export function createChatDrawerStyle(): HTMLStyleElement {
       .ai-chat-drawer[data-minimized='true'] { border: 0; bottom: auto; height: 56px; right: 12px; top: 12px; width: 56px !important; }
       .drawer-resize { cursor: ns-resize; height: 10px; left: 0; right: 0; top: -5px; width: auto; }
       .shortcut-hint { display: none; }
+      /* Too narrow to give the page a column of its own, so the dock becomes a
+         bottom sheet and the page keeps its full width behind it. */
+      .ai-chat-windows[data-layout='fixed'] { border-left: 0; border-top: 1px solid #343c49; box-shadow: 0 -14px 35px rgb(0 0 0 / .32); height: min(76vh, 680px); top: auto; width: 100vw; }
+      .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] { height: 46px; width: 100vw; }
+      .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-header { flex-direction: row; height: auto; padding: 6px 8px; }
+      .ai-chat-drawer[data-layout='fixed'] { height: 100%; width: 100% !important; }
+      .dock-grip { cursor: ns-resize; height: 10px; left: 0; right: 0; top: -5px; width: auto; }
     }
   `;
   return style;
@@ -1666,6 +1877,31 @@ function button(label: string, onClick?: () => void): HTMLButtonElement {
   return output;
 }
 
+/** A labelled toolbar control: a glyph, a word, and a sentence in the tooltip. */
+function toolButton(
+  icon: string,
+  label: string,
+  title: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const node = document.createElement('button');
+  node.type = 'button';
+  node.className = 'tool-button';
+  node.append(element('span', 'tool-icon'), element('span', 'tool-label'));
+  setToolButton(node, icon, label, title);
+  node.addEventListener('click', onClick);
+  return node;
+}
+
+function setToolButton(node: HTMLElement, icon: string, label: string, title: string): void {
+  const iconNode = node.querySelector('.tool-icon');
+  const labelNode = node.querySelector('.tool-label');
+  if (iconNode !== null) iconNode.textContent = icon;
+  if (labelNode !== null) labelNode.textContent = label;
+  node.title = title;
+  node.setAttribute('aria-label', title);
+}
+
 function iconButton(label: string, title: string, onClick: () => void): HTMLButtonElement {
   const output = button(label, onClick);
   output.className = 'icon-button';
@@ -1699,7 +1935,8 @@ export function intersectsViewport(
   );
 }
 
-function isNarrowViewport(): boolean {
+/** Below this width there is no room to give the page its own column. */
+export function isNarrowViewport(): boolean {
   try {
     return window.matchMedia?.('(max-width: 720px)').matches === true;
   } catch {

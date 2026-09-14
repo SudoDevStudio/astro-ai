@@ -15,7 +15,11 @@ by restarting the dev server.
 
 | Example | Island | Editor support |
 | --- | --- | --- |
+<<<<<<< HEAD
+| [basic](basic) | React JSX | full |
+=======
 | [basic](basic) | none, pure Astro | full |
+>>>>>>> origin/main
 | [with-react](with-react) | React JSX | full |
 | [with-preact](with-preact) | Preact JSX | full |
 | [with-solid](with-solid) | Solid JSX | full |
@@ -52,7 +56,11 @@ exist as the development fixture for that work.
 
 ## Which example to start from
 
-`basic` is the broadest tour: content sources, registered components, repeated
-templates, and client-side navigation across four pages. The framework examples
-are deliberately small and near-identical to each other, so they are the ones to
-copy when starting a project or comparing behaviour between frameworks.
+`basic` is the broadest tour and the one to open when testing a change to the
+editor: content sources, registered components, repeated templates, a React
+island, share preview fixtures, and client-side navigation across nine pages.
+
+The framework examples are deliberately small and near-identical to each other,
+so they are the ones to copy when starting a project or comparing behaviour
+between frameworks. `basic` carries React too, but only as one page of a larger
+tour — it is not the place to compare frameworks.

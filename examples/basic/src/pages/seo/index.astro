@@ -1,0 +1,104 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import SeoNav from '../../components/SeoNav.astro';
+---
+
+<Layout
+	title="Share preview"
+	lede="Three pages with deliberately different head metadata, so every rule can be seen firing and passing."
+	seo={{
+		description:
+			'Fixtures for the share preview: a fully tagged page, a page that trips several audit rules at once, and a page with nothing but a title.',
+		image: '/og/undersized.png',
+		imageSize: [800, 418],
+		imageAlt: 'Abstract share card, deliberately too small for a wide card',
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		Open a chat window and press <strong>◉</strong> in its toolbar. The sheet
+		reads this page's head and shows what each network renders. Then walk the
+		four pages below and watch the cards and the issue list change.
+	</Callout>
+
+	<SeoNav />
+
+	<Callout title="This page is the middle tier">
+		Its <code>og:image</code> is 800×418 — big enough that every network keeps
+		it, too small for the wide card, which the preview reports as one warning
+		rather than an error. The other three pages sit either side of that.
+	</Callout>
+
+	<section class="panel" aria-label="What each fixture demonstrates">
+		<h2>What each page is for</h2>
+		<dl>
+			<dt>Clean</dt>
+			<dd>
+				Every tag present and within limits: absolute <code>og:image</code> at
+				1200×630 with declared dimensions and alt text,
+				<code>twitter:card</code> set to <code>summary_large_image</code>,
+				<code>og:url</code> matching the canonical link. The preview finds
+				nothing to report, and every card renders its wide image.
+			</dd>
+
+			<dt>Broken</dt>
+			<dd>
+				Several real mistakes at once: an <code>og:image</code> written as a
+				relative path that no crawler can follow, and which is 64×64 anyway; an
+				invalid <code>twitter:card</code> value; an <code>og:url</code> that
+				disagrees with the canonical link; a title and description past the
+				lengths Google reads; and <code>noindex</code>.
+			</dd>
+
+			<dt>Bare head</dt>
+			<dd>
+				A title and nothing else — no description, no Open Graph, no
+				<code>twitter:</code> tags, no canonical, no favicon, and no
+				<code>lang</code> on <code>&lt;html&gt;</code>. Every card falls back to
+				the document title and renders without an image, which is what a page
+				nobody has tagged actually looks like when shared.
+			</dd>
+		</dl>
+	</section>
+
+	<Callout title="Fixing from here">
+		On the Issues tab, <strong>Fix with AI</strong> sends one finding — or the
+		whole list — to the agent along with the current tag values, and the chat
+		opens with the route attached. The head tags for these pages live in
+		<code>src/components/Seo.astro</code>, driven by the
+		<code>seo</code> prop each page passes to the layout.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px dashed #3f4552;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0 0 0.75rem;
+	}
+
+	dl {
+		display: grid;
+		gap: 0.75rem;
+		margin: 0;
+	}
+
+	dt {
+		color: #c4b5fd;
+		font-weight: 700;
+	}
+
+	dd {
+		color: #aeb6c5;
+		margin: 0.2rem 0 0;
+	}
+
+	code {
+		color: #c4b5fd;
+	}
+</style>

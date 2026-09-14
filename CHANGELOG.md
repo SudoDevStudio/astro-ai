@@ -9,6 +9,8 @@ write entries for someone deciding whether to upgrade.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-14
+
 ### Added
 
 - Share preview: the green **SEO** button on a chat window's toolbar opens a
@@ -123,6 +125,7 @@ First stable release, and the first to publish its sources alongside `dist`.
 reconstructed here. See the [releases page][releases] for those tags.
 
 [releases]: https://github.com/SudoDevStudio/astro-ai/releases
-[Unreleased]: https://github.com/SudoDevStudio/astro-ai/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/SudoDevStudio/astro-ai/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.3.0
 [1.1.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.1.0
 [1.0.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.0.0

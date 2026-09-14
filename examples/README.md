@@ -15,11 +15,7 @@ by restarting the dev server.
 
 | Example | Island | Editor support |
 | --- | --- | --- |
-<<<<<<< HEAD
 | [basic](basic) | React JSX | full |
-=======
-| [basic](basic) | none, pure Astro | full |
->>>>>>> origin/main
 | [with-react](with-react) | React JSX | full |
 | [with-preact](with-preact) | Preact JSX | full |
 | [with-solid](with-solid) | Solid JSX | full |

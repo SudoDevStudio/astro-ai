@@ -15,13 +15,32 @@ import {
   type PageMetadata,
   type SeoFinding,
 } from './seo-metadata.js';
+import {
+  auditStructuredData,
+  describeEntity,
+  describeStructuredData,
+  readStructuredData,
+  resolveRichResult,
+  type EntityView,
+  type RichResult,
+  type StructuredData,
+} from './seo-schema.js';
+import {
+  auditAnswerReadiness,
+  composeAnswer,
+  describeExtractionForAgent,
+  extractForAnswerEngines,
+  measureServerText,
+  type AeoAnswer,
+  type AeoExtraction,
+} from './seo-aeo.js';
 
 export type SeoSheetCallbacks = {
   /** Hands a finding to the agent, the same path 'Fix with AI' uses elsewhere. */
   onFix(context: AgentExternalContext): void;
 };
 
-type PaneId = 'previews' | 'issues' | 'tags';
+type PaneId = 'previews' | 'issues' | 'schema' | 'aeo' | 'tags';
 
 /**
  * A full-screen reading of the page's head: what each network will render, what
@@ -46,6 +65,12 @@ export class SeoPreviewSheet {
   #pane: PaneId = 'previews';
   #open = false;
   #networks: readonly NetworkId[] = NETWORK_IDS;
+  #structured: StructuredData = { blocks: [], nodes: [] };
+  #rich: RichResult = {};
+  #extraction: AeoExtraction | undefined;
+  #answer: AeoAnswer | undefined;
+  /** Guards the served-HTML fetch against a refresh that overtakes it. */
+  #serverProbe = 0;
 
   constructor(callbacks: SeoSheetCallbacks) {
     this.#callbacks = callbacks;
@@ -85,7 +110,7 @@ export class SeoPreviewSheet {
 
     const tabs = element('nav', 'seo-tabs');
     tabs.setAttribute('aria-label', 'Share preview sections');
-    for (const pane of ['previews', 'issues', 'tags'] as const) {
+    for (const pane of PANES) {
       const tab = textButton('', () => this.showPane(pane));
       tab.className = 'seo-tab';
       tab.setAttribute('role', 'tab');
@@ -95,7 +120,7 @@ export class SeoPreviewSheet {
     }
 
     const scroll = element('div', 'seo-scroll');
-    for (const pane of ['previews', 'issues', 'tags'] as const) {
+    for (const pane of PANES) {
       const body = element('div', `seo-pane seo-pane-${pane}`);
       body.hidden = pane !== this.#pane;
       this.#panes.set(pane, body);
@@ -152,6 +177,13 @@ export class SeoPreviewSheet {
   refresh(): void {
     const metadata = readPageMetadata(document, window.location.href);
     this.#metadata = metadata;
+    // Read as one pair: a cross-check compares the schema against these tags,
+    // so they have to describe the same moment in the page's life.
+    this.#structured = readStructuredData(document);
+    this.#rich = resolveRichResult(this.#structured);
+    this.#extraction = extractForAnswerEngines(document, metadata, this.#structured);
+    this.#answer = composeAnswer(this.#extraction, metadata);
+    this.#measureServerText(metadata);
     this.#route.textContent = metadata.path;
     this.#route.title = metadata.url;
     this.#startProbe(metadata);
@@ -220,7 +252,16 @@ export class SeoPreviewSheet {
   #render(): void {
     const metadata = this.#metadata;
     if (metadata === undefined) return;
-    this.#findings = auditPageMetadata(metadata, this.#probe);
+    // Meta-tag and structured-data findings are one list: they are the same
+    // kind of problem to the reader, and Fix with AI should be able to take
+    // them together.
+    this.#findings = [
+      ...auditPageMetadata(metadata, this.#probe),
+      ...auditStructuredData(this.#structured, metadata),
+      ...(this.#extraction === undefined
+        ? []
+        : auditAnswerReadiness(this.#extraction, metadata, this.#structured)),
+    ].sort((first, second) => severityRank(first.level) - severityRank(second.level));
     const counts = countBySeverity(this.#findings);
     this.#score.dataset.level = counts.error > 0 ? 'error' : counts.warning > 0 ? 'warning' : 'clean';
     this.#score.textContent = this.#findings.length === 0
@@ -234,10 +275,14 @@ export class SeoPreviewSheet {
           .join(' · ');
 
     this.#tabs.get('issues')?.replaceChildren(paneLabel('issues', this.#findings.length));
+    this.#tabs.get('schema')?.replaceChildren(paneLabel('schema', this.#structured.nodes.length));
+    this.#tabs.get('aeo')?.replaceChildren(paneLabel('aeo', this.#extraction?.facts.length ?? 0));
     this.#tabs.get('tags')?.replaceChildren(paneLabel('tags', metadata.tags.length));
 
     this.#renderPreviews(metadata);
     this.#renderIssues(metadata);
+    this.#renderSchema();
+    this.#renderAeo();
     this.#renderTags(metadata);
   }
 
@@ -270,7 +315,7 @@ export class SeoPreviewSheet {
     }
 
     const stage = element('div', 'seo-card-stage');
-    stage.append(renderNetworkCard(card));
+    stage.append(renderNetworkCard(card, this.#rich));
     frame.append(label, stage);
     return frame;
   }
@@ -295,7 +340,7 @@ export class SeoPreviewSheet {
     const summary = element('p', 'seo-issues-summary');
     summary.textContent = `${this.#findings.length} issue${this.#findings.length === 1 ? '' : 's'} on ${metadata.path}. Fixing sends the full list and the current tag values to the agent.`;
     const fixAll = textButton('✦ Fix all with AI', () => {
-      this.#callbacks.onFix(seoFixContext(metadata, this.#findings));
+      this.#callbacks.onFix(seoFixContext(metadata, this.#findings, this.#structured, this.#extraction));
       this.close();
     });
     fixAll.className = 'seo-fix-all';
@@ -311,7 +356,7 @@ export class SeoPreviewSheet {
       const title = element('strong', 'seo-finding-title');
       title.textContent = finding.title;
       const fix = textButton('✦ Fix with AI', () => {
-        this.#callbacks.onFix(seoFixContext(metadata, [finding]));
+        this.#callbacks.onFix(seoFixContext(metadata, [finding], this.#structured, this.#extraction));
         this.close();
       });
       fix.className = 'seo-fix';
@@ -336,6 +381,217 @@ export class SeoPreviewSheet {
       list.append(item);
     }
     pane.replaceChildren(bar, list);
+  }
+
+  #renderSchema(): void {
+    const pane = this.#panes.get('schema');
+    if (pane === undefined) return;
+    if (this.#structured.blocks.length === 0) {
+      const empty = element('div', 'seo-clean');
+      const mark = element('span', 'seo-clean-mark');
+      mark.dataset.tone = 'neutral';
+      mark.textContent = '{ }';
+      const heading = document.createElement('strong');
+      heading.textContent = 'No structured data';
+      const copy = document.createElement('p');
+      copy.textContent = 'This page has no JSON-LD, so its result can only be a title, a URL, and a snippet. A BreadcrumbList, an Organization, or a Product is what adds anything more.';
+      empty.append(mark, heading, copy);
+      pane.replaceChildren(empty);
+      return;
+    }
+
+    const blocks = this.#structured.blocks.map((block) => {
+      const frame = element('section', 'schema-block');
+      frame.dataset.state = block.error === undefined ? 'parsed' : 'invalid';
+
+      const head = element('div', 'schema-block-head');
+      const index = element('span', 'schema-index');
+      index.textContent = `Block ${block.index}`;
+      head.append(index);
+      for (const node of block.nodes) {
+        const chip = element('span', 'schema-type');
+        chip.textContent = node.types.join(' + ') || '(no @type)';
+        chip.title = node.path;
+        head.append(chip);
+      }
+      if (block.context !== undefined) {
+        const context = element('span', 'schema-context');
+        context.textContent = block.context;
+        head.append(context);
+      }
+      frame.append(head);
+
+      if (block.error !== undefined) {
+        const error = element('p', 'schema-error');
+        error.textContent = block.error;
+        frame.append(error);
+      }
+
+      // The entity, drawn the way the thing it describes actually appears.
+      // Braces are the notation, not the meaning, so they go behind a toggle.
+      for (const node of block.nodes) {
+        frame.append(renderEntityCard(describeEntity(node)));
+      }
+
+      const details = document.createElement('details');
+      details.className = 'schema-source';
+      const summary = document.createElement('summary');
+      summary.textContent = block.error === undefined ? 'Show JSON' : 'Show the text that failed to parse';
+      const source = document.createElement('pre');
+      source.textContent = block.error === undefined ? prettyJson(block.raw) : block.raw;
+      details.append(summary, source);
+      frame.append(details);
+      return frame;
+    });
+
+    const summary = element('p', 'schema-summary');
+    const nodeCount = this.#structured.nodes.length;
+    summary.textContent = `${this.#structured.blocks.length} block${this.#structured.blocks.length === 1 ? '' : 's'} describing ${nodeCount} ${nodeCount === 1 ? 'thing' : 'things'}. What they add to the result is on the Google card; what is wrong with them is on Issues.`;
+    pane.replaceChildren(summary, ...blocks);
+  }
+
+  /**
+   * Reads the page as it was served, before any script ran.
+   *
+   * The sheet reads the rendered DOM, which is the page after hydration. Most
+   * answer engines are not browsers. Where the two disagree, everything built
+   * on the client is invisible to them, and this is the only way to see that
+   * from inside the page.
+   */
+  #measureServerText(metadata: PageMetadata): void {
+    const token = (this.#serverProbe += 1);
+    if (typeof fetch !== 'function' || typeof DOMParser !== 'function') return;
+    let request: Promise<Response>;
+    try {
+      request = fetch(window.location.href, { headers: { accept: 'text/html' }, credentials: 'same-origin' });
+    } catch {
+      return;
+    }
+    void request
+      .then((response) => (response.ok ? response.text() : undefined))
+      .then((html) => {
+        if (html === undefined || token !== this.#serverProbe || this.#extraction === undefined) return;
+        this.#extraction = {
+          ...this.#extraction,
+          serverWords: measureServerText(html, (markup) =>
+            new DOMParser().parseFromString(markup, 'text/html')),
+        };
+        this.#answer = composeAnswer(this.#extraction, metadata);
+        this.#render();
+      })
+      .catch(() => {
+        // A page behind an auth redirect simply keeps the rendered reading.
+      });
+  }
+
+  #renderAeo(): void {
+    const pane = this.#panes.get('aeo');
+    const extraction = this.#extraction;
+    const answer = this.#answer;
+    if (pane === undefined || extraction === undefined || answer === undefined) return;
+
+    const intro = element('p', 'aeo-intro');
+    intro.textContent = 'Search shows your page. An answer engine reads it, states what it says, and cites you if it can. This is what one has to work with.';
+
+    const extract = element('section', 'aeo-block');
+    extract.append(sectionTitle('What an answer engine extracts'));
+
+    const subject = element('div', 'aeo-subject');
+    if (extraction.entity === undefined) {
+      subject.dataset.state = 'missing';
+      subject.textContent = 'No declared subject — an engine must infer what this page is about.';
+    } else {
+      const type = element('span', 'aeo-subject-type');
+      type.textContent = extraction.entity.label;
+      const name = element('strong', 'aeo-subject-name');
+      name.textContent = extraction.entity.name;
+      subject.append(type, name);
+    }
+    extract.append(subject);
+
+    if (extraction.facts.length === 0) {
+      extract.append(emptyNote('No facts stated plainly enough to lift.'));
+    } else {
+      const facts = element('dl', 'aeo-facts');
+      for (const fact of extraction.facts) {
+        const label = document.createElement('dt');
+        label.textContent = fact.label;
+        const value = document.createElement('dd');
+        value.textContent = fact.value;
+        const source = element('span', 'aeo-source');
+        source.dataset.source = fact.source;
+        source.textContent = fact.source === 'schema' ? 'structured' : 'meta tag';
+        source.title = fact.source === 'schema'
+          ? 'Declared in JSON-LD, so it can be lifted verbatim.'
+          : 'Read from a meta tag, which is prose to an engine rather than a typed value.';
+        value.append(source);
+        facts.append(label, value);
+      }
+      extract.append(facts);
+    }
+
+    const quotable = element('div', 'aeo-quotable');
+    quotable.append(sectionTitle(`Quotable units · ${extraction.quotable.length}`, 'aeo-subtitle'));
+    if (extraction.quotable.length === 0) {
+      quotable.append(emptyNote('No question and answer pairs. Assistants answer questions; this page offers none in that shape.'));
+    } else {
+      for (const unit of extraction.quotable.slice(0, 5)) {
+        const row = element('div', 'aeo-qa');
+        const question = element('strong', 'aeo-question');
+        question.textContent = unit.question;
+        const badge = element('span', 'aeo-source');
+        badge.dataset.source = unit.source === 'faq' ? 'schema' : 'meta';
+        badge.textContent = unit.source === 'faq' ? 'FAQ schema' : 'heading';
+        const answerText = element('p', 'aeo-answer-text');
+        answerText.textContent = unit.answer;
+        question.append(badge);
+        row.append(question, answerText);
+        quotable.append(row);
+      }
+    }
+    extract.append(quotable);
+
+    const stats = element('div', 'aeo-stats');
+    stats.append(
+      stat('Readable words', String(extraction.renderedWords)),
+      stat(
+        'In the served HTML',
+        extraction.serverWords === undefined ? 'reading…' : String(extraction.serverWords),
+        extraction.serverWords !== undefined && extraction.renderedWords > 0 &&
+          extraction.serverWords < extraction.renderedWords * 0.4 ? 'bad' : 'good',
+      ),
+      stat('Headings', String(extraction.headings.length)),
+      stat('Author', extraction.provenance.author ?? 'none', extraction.provenance.author === undefined ? 'bad' : 'good'),
+      stat('Published', extraction.provenance.published ?? 'none', extraction.provenance.published === undefined ? 'bad' : 'good'),
+      stat('Citable URL', extraction.provenance.canonical === undefined ? 'none' : 'canonical', extraction.provenance.canonical === undefined ? 'bad' : 'good'),
+    );
+    extract.append(stats);
+
+    const likely = element('section', 'aeo-block');
+    likely.append(sectionTitle('The answer this page affords'));
+    const card = element('div', 'aeo-answer');
+    card.dataset.grounding = answer.grounding;
+    const sentence = element('p', 'aeo-sentence');
+    sentence.textContent = answer.sentence;
+    const cite = element('div', 'aeo-cite');
+    const source = element('span', 'aeo-cite-source');
+    source.textContent = answer.citation;
+    const grounding = element('span', 'aeo-grounding');
+    grounding.textContent = `${answer.grounding} grounding`;
+    cite.append(source, grounding);
+    card.append(sentence, cite);
+
+    const caveat = element('p', 'aeo-caveat');
+    caveat.textContent = 'Assembled from the values above by a template, not generated by a model. Every clause is something this page states — which is the point: a thin sentence here means a thin page, not a cautious assistant.';
+    likely.append(card, caveat);
+
+    const aeoFindings = this.#findings.filter(({ id }) => id.startsWith('aeo-'));
+    const summary = element('p', 'aeo-findings-note');
+    summary.textContent = aeoFindings.length === 0
+      ? 'Nothing is holding this page back from being quoted.'
+      : `${aeoFindings.length} thing${aeoFindings.length === 1 ? '' : 's'} limiting how quotable this page is, listed on Issues.`;
+
+    pane.replaceChildren(intro, extract, likely, summary);
   }
 
   #renderTags(metadata: PageMetadata): void {
@@ -366,19 +622,29 @@ export class SeoPreviewSheet {
 export function seoFixContext(
   metadata: PageMetadata,
   findings: readonly SeoFinding[],
+  structured?: StructuredData,
+  extraction?: AeoExtraction,
 ): AgentExternalContext {
   const title = findings.length === 1 && findings[0] !== undefined
     ? `${findings[0].title} · ${metadata.path}`
     : `${findings.length} share preview issues · ${metadata.path}`;
+  // The schema goes in only when a finding is about it, so a plain meta-tag
+  // fix is not padded with JSON the agent does not need to read.
+  const touchesSchema = findings.some(({ id }) => id.startsWith('schema-'));
+  const touchesAeo = findings.some(({ id }) => id.startsWith('aeo-'));
+  const extras = [
+    structured !== undefined && (touchesSchema || touchesAeo) ? describeStructuredData(structured) : undefined,
+    extraction !== undefined && touchesAeo ? describeExtractionForAgent(extraction) : undefined,
+  ].filter((part): part is string => part !== undefined);
   return {
     kind: 'seo',
     title,
-    message: describeFindingsForAgent(metadata, findings),
+    message: [describeFindingsForAgent(metadata, findings), ...extras].join('\n\n'),
   };
 }
 
 /** Dispatches to the shape each network actually renders. */
-function renderNetworkCard(card: NetworkCard): HTMLElement {
+function renderNetworkCard(card: NetworkCard, rich: RichResult): HTMLElement {
   switch (card.network) {
     case 'x':
       return renderX(card);
@@ -395,7 +661,7 @@ function renderNetworkCard(card: NetworkCard): HTMLElement {
     case 'whatsapp':
       return renderWhatsApp(card);
     case 'google':
-      return renderGoogle(card);
+      return renderGoogle(card, rich);
   }
 }
 
@@ -519,7 +785,12 @@ function renderWhatsApp(card: NetworkCard): HTMLElement {
   return bubble;
 }
 
-function renderGoogle(card: NetworkCard): HTMLElement {
+/**
+ * The one card the page's JSON-LD changes. Everything the schema adds — the
+ * trail, the stars, the price, the questions — appears only here, which is why
+ * a preview that ignores structured data shows a result nobody will get.
+ */
+function renderGoogle(card: NetworkCard, rich: RichResult): HTMLElement {
   const frame = element('div', 'gg-result');
   const site = element('div', 'gg-site');
   const badge = element('span', 'gg-favicon');
@@ -532,10 +803,86 @@ function renderGoogle(card: NetworkCard): HTMLElement {
     badge.textContent = card.domain.slice(0, 1).toUpperCase();
   }
   const names = element('div', 'gg-names');
-  names.append(line('gg-site-name', card.siteName ?? card.domain), line('gg-url', breadcrumb(card)));
+  const trail = rich.breadcrumbs === undefined
+    ? breadcrumb(card)
+    : [card.domain, ...rich.breadcrumbs].join(' › ');
+  names.append(
+    line('gg-site-name', rich.siteName ?? card.siteName ?? card.domain),
+    line('gg-url', trail),
+  );
   site.append(badge, names);
-  frame.append(site, line('gg-title', card.title), line('gg-text', card.description));
+  frame.append(site, line('gg-title', card.title));
+
+  const facts = element('div', 'gg-facts');
+  if (rich.rating !== undefined) {
+    const stars = element('span', 'gg-stars');
+    stars.textContent = starsFor(rich.rating.value, rich.rating.best);
+    const score = element('span', 'gg-score');
+    score.textContent = rich.rating.count === undefined
+      ? `${rich.rating.value}`
+      : `${rich.rating.value} (${rich.rating.count})`;
+    facts.append(stars, score);
+  }
+  if (rich.offer?.price !== undefined) {
+    const price = element('span', 'gg-price');
+    price.textContent = `${currencySymbol(rich.offer.currency)}${rich.offer.price}`;
+    facts.append(price);
+  }
+  if (rich.offer?.availability !== undefined) {
+    const stock = element('span', 'gg-stock');
+    stock.textContent = humanizeAvailability(rich.offer.availability);
+    facts.append(stock);
+  }
+  if (rich.datePublished !== undefined || rich.author !== undefined) {
+    const byline = element('span', 'gg-byline');
+    byline.textContent = [formatDate(rich.datePublished), rich.author].filter(Boolean).join(' — ');
+    facts.append(byline);
+  }
+  if (facts.childElementCount > 0) frame.append(facts);
+
+  frame.append(line('gg-text', card.description));
+
+  if (rich.faq !== undefined) {
+    const faq = element('div', 'gg-faq');
+    for (const entry of rich.faq.slice(0, 3)) {
+      const row = document.createElement('details');
+      row.className = 'gg-faq-row';
+      const summary = document.createElement('summary');
+      summary.textContent = entry.question;
+      const answer = element('p', 'gg-faq-answer');
+      answer.textContent = entry.answer;
+      row.append(summary, answer);
+      faq.append(row);
+    }
+    frame.append(faq);
+  }
   return frame;
+}
+
+function starsFor(value: number, best: number): string {
+  const scaled = Math.max(0, Math.min(5, best === 0 ? 0 : (value / best) * 5));
+  const full = Math.floor(scaled);
+  const half = scaled - full >= 0.5 ? 1 : 0;
+  return `${'★'.repeat(full)}${half === 1 ? '⯨' : ''}${'☆'.repeat(Math.max(0, 5 - full - half))}`;
+}
+
+function currencySymbol(currency?: string): string {
+  const symbols: Record<string, string> = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', INR: '₹' };
+  if (currency === undefined) return '';
+  return symbols[currency.toUpperCase()] ?? `${currency} `;
+}
+
+function humanizeAvailability(value: string): string {
+  return value
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, (character) => character.toUpperCase());
+}
+
+function formatDate(value?: string): string {
+  if (value === undefined) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function breadcrumb(card: NetworkCard): string {
@@ -578,10 +925,20 @@ function line(className: string, text: string): HTMLElement {
   return node;
 }
 
+const PANES = ['previews', 'issues', 'schema', 'aeo', 'tags'] as const;
+
+const PANE_LABELS: Record<PaneId, string> = {
+  previews: 'Previews',
+  issues: 'Issues',
+  schema: 'Schema',
+  aeo: 'AEO',
+  tags: 'Tags',
+};
+
 function paneLabel(pane: PaneId, count: number): DocumentFragment {
   const fragment = document.createDocumentFragment();
   const label = document.createElement('span');
-  label.textContent = pane === 'previews' ? 'Previews' : pane === 'issues' ? 'Issues' : 'Tags';
+  label.textContent = PANE_LABELS[pane];
   fragment.append(label);
   if (count > 0) {
     const badge = element('span', 'seo-tab-count');
@@ -589,6 +946,337 @@ function paneLabel(pane: PaneId, count: number): DocumentFragment {
     fragment.append(badge);
   }
   return fragment;
+}
+
+/**
+ * Draws an entity the way the top platform shows that type.
+ *
+ * A Product is a thing with a price and a rating; an Article is a thing with a
+ * byline and a date. Rendering each as the result it produces is the difference
+ * between reading your schema and seeing it. A type with no shape of its own
+ * falls back to labelled rows rather than being guessed at.
+ */
+function renderEntityCard(view: EntityView): HTMLElement {
+  const frame = element('article', 'entity-card');
+  frame.dataset.type = view.type;
+
+  const label = element('div', 'entity-label');
+  const badge = element('span', 'entity-badge');
+  badge.textContent = view.label;
+  label.append(badge);
+  frame.append(label);
+
+  switch (view.type) {
+    case 'Product':
+      frame.append(renderProductEntity(view));
+      break;
+    case 'Article':
+      frame.append(renderArticleEntity(view));
+      break;
+    case 'Recipe':
+      frame.append(renderRecipeEntity(view));
+      break;
+    case 'Event':
+      frame.append(renderEventEntity(view));
+      break;
+    case 'VideoObject':
+      frame.append(renderVideoEntity(view));
+      break;
+    case 'FAQPage':
+    case 'QAPage':
+      frame.append(renderFaqEntity(view));
+      break;
+    case 'BreadcrumbList':
+      frame.append(renderBreadcrumbEntity(view));
+      break;
+    case 'Organization':
+    case 'LocalBusiness':
+      frame.append(renderOrganizationEntity(view));
+      break;
+    default:
+      frame.append(renderGenericEntity(view));
+  }
+  return frame;
+}
+
+function entityThumb(view: EntityView, className = 'entity-thumb'): HTMLElement {
+  if (view.image === undefined) {
+    const placeholder = element('div', `${className} seo-image-missing`);
+    placeholder.textContent = 'no image';
+    return placeholder;
+  }
+  const wrapper = element('div', className);
+  const image = document.createElement('img');
+  image.src = view.image;
+  image.alt = '';
+  image.loading = 'lazy';
+  image.addEventListener('error', () => {
+    wrapper.classList.add('seo-image-missing');
+    wrapper.textContent = 'image failed';
+  });
+  wrapper.append(image);
+  return wrapper;
+}
+
+function entityName(view: EntityView): HTMLElement {
+  const name = element('strong', 'entity-name');
+  name.textContent = view.name ?? '(no name)';
+  if (view.name === undefined) name.dataset.missing = 'true';
+  return name;
+}
+
+function renderProductEntity(view: EntityView): HTMLElement {
+  const row = element('div', 'entity-row');
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  if (view.rating !== undefined) {
+    const rating = element('div', 'entity-rating');
+    const stars = element('span', 'gg-stars');
+    stars.textContent = starsFor(view.rating.value, view.rating.best);
+    const score = element('span', 'gg-score');
+    score.textContent = view.rating.count === undefined
+      ? `${view.rating.value}`
+      : `${view.rating.value} (${view.rating.count})`;
+    rating.append(stars, score);
+    body.append(rating);
+  }
+  const priceRow = element('div', 'entity-price-row');
+  if (view.offer?.price !== undefined) {
+    const price = element('span', 'entity-price');
+    price.textContent = `${currencySymbol(view.offer.currency)}${view.offer.price}`;
+    priceRow.append(price);
+  } else {
+    priceRow.append(missingChip('no price'));
+  }
+  if (view.offer?.availability !== undefined) {
+    const stock = element('span', 'entity-stock');
+    stock.textContent = humanizeAvailability(view.offer.availability);
+    priceRow.append(stock);
+  }
+  body.append(priceRow);
+  const meta = [view.brand, view.sku].filter((part): part is string => part !== undefined);
+  if (meta.length > 0) body.append(line('entity-meta', meta.join(' · ')));
+  row.append(entityThumb(view), body);
+  return row;
+}
+
+function renderArticleEntity(view: EntityView): HTMLElement {
+  const row = element('div', 'entity-row');
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  if (view.description !== undefined) body.append(line('entity-text', view.description));
+  const byline = element('div', 'entity-byline');
+  if (view.author === undefined) byline.append(missingChip('no author'));
+  else byline.append(textSpan(view.author));
+  if (view.datePublished !== undefined) byline.append(textSpan(formatDate(view.datePublished)));
+  if (view.publisher !== undefined) byline.append(textSpan(view.publisher));
+  body.append(byline);
+  row.append(entityThumb(view), body);
+  return row;
+}
+
+function renderRecipeEntity(view: EntityView): HTMLElement {
+  const row = element('div', 'entity-row');
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  const facts = element('div', 'entity-byline');
+  if (view.rating !== undefined) {
+    const stars = element('span', 'gg-stars');
+    stars.textContent = starsFor(view.rating.value, view.rating.best);
+    facts.append(stars);
+  }
+  if (view.duration !== undefined) facts.append(textSpan(view.duration));
+  if (view.author !== undefined) facts.append(textSpan(view.author));
+  body.append(facts);
+  row.append(entityThumb(view), body);
+  return row;
+}
+
+function renderEventEntity(view: EntityView): HTMLElement {
+  const row = element('div', 'entity-row');
+  const when = element('div', 'entity-date');
+  const date = view.startDate === undefined ? undefined : new Date(view.startDate);
+  if (date !== undefined && !Number.isNaN(date.getTime())) {
+    const month = element('span', 'entity-date-month');
+    month.textContent = date.toLocaleDateString(undefined, { month: 'short' }).toUpperCase();
+    const day = element('span', 'entity-date-day');
+    day.textContent = String(date.getDate());
+    when.append(month, day);
+  } else {
+    when.dataset.missing = 'true';
+    when.textContent = '—';
+  }
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  const facts = element('div', 'entity-byline');
+  if (view.location === undefined) facts.append(missingChip('no venue'));
+  else facts.append(textSpan(view.location));
+  if (view.offer?.price !== undefined) {
+    facts.append(textSpan(`${currencySymbol(view.offer.currency)}${view.offer.price}`));
+  }
+  body.append(facts);
+  row.append(when, body);
+  return row;
+}
+
+function renderVideoEntity(view: EntityView): HTMLElement {
+  const row = element('div', 'entity-row');
+  const thumb = entityThumb(view, 'entity-thumb entity-thumb-wide');
+  if (view.duration !== undefined) {
+    const duration = element('span', 'entity-duration');
+    duration.textContent = view.duration;
+    thumb.append(duration);
+  }
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  const facts = element('div', 'entity-byline');
+  if (view.datePublished !== undefined) facts.append(textSpan(formatDate(view.datePublished)));
+  if (view.description !== undefined) body.append(line('entity-text', view.description));
+  body.append(facts);
+  row.append(thumb, body);
+  return row;
+}
+
+function renderFaqEntity(view: EntityView): HTMLElement {
+  const list = element('div', 'entity-faq');
+  for (const entry of view.faq ?? []) {
+    const row = document.createElement('details');
+    row.className = 'gg-faq-row';
+    const summary = document.createElement('summary');
+    summary.textContent = entry.question;
+    const answer = element('p', 'gg-faq-answer');
+    if (entry.answer === '') {
+      answer.dataset.missing = 'true';
+      answer.textContent = 'This question has no answer, which can cost the whole set.';
+    } else {
+      answer.textContent = entry.answer;
+    }
+    row.append(summary, answer);
+    list.append(row);
+  }
+  if (list.childElementCount === 0) list.append(emptyNote('No questions in this block.'));
+  return list;
+}
+
+function renderBreadcrumbEntity(view: EntityView): HTMLElement {
+  const trail = element('div', 'entity-trail');
+  const crumbs = view.breadcrumbs ?? [];
+  for (const [index, crumb] of crumbs.entries()) {
+    const step = element('span', 'entity-crumb');
+    step.textContent = crumb.name;
+    if (crumb.url === undefined && index < crumbs.length - 1) step.dataset.missing = 'true';
+    trail.append(step);
+    if (index < crumbs.length - 1) {
+      const separator = element('span', 'entity-crumb-sep');
+      separator.textContent = '›';
+      trail.append(separator);
+    }
+  }
+  if (crumbs.length === 0) trail.append(emptyNote('No crumbs in this list.'));
+  return trail;
+}
+
+function renderOrganizationEntity(view: EntityView): HTMLElement {
+  const row = element('div', 'entity-row');
+  const logo = element('div', 'entity-logo');
+  if (view.image === undefined) {
+    logo.classList.add('seo-image-missing');
+    logo.textContent = '—';
+  } else {
+    const image = document.createElement('img');
+    image.src = view.image;
+    image.alt = '';
+    logo.append(image);
+  }
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  const facts = element('div', 'entity-byline');
+  if (view.url !== undefined) facts.append(textSpan(view.url.replace(/^https?:\/\//, '')));
+  if (view.address !== undefined) facts.append(textSpan(view.address));
+  if (view.telephone !== undefined) facts.append(textSpan(view.telephone));
+  body.append(facts);
+  if (view.sameAs !== undefined) {
+    const links = element('div', 'entity-sameas');
+    for (const link of view.sameAs.slice(0, 4)) {
+      const chip = element('span', 'entity-link');
+      chip.textContent = link.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] ?? link;
+      chip.title = link;
+      links.append(chip);
+    }
+    body.append(links);
+  }
+  row.append(logo, body);
+  return row;
+}
+
+function renderGenericEntity(view: EntityView): HTMLElement {
+  const body = element('div', 'entity-body');
+  body.append(entityName(view));
+  if (view.description !== undefined) body.append(line('entity-text', view.description));
+  const rows = [
+    view.url === undefined ? undefined : { label: 'url', value: view.url },
+    ...view.fields.slice(0, 8),
+  ].filter((row): row is { label: string; value: string } => row !== undefined);
+  if (rows.length > 0) {
+    const table = element('dl', 'entity-fields');
+    for (const row of rows) {
+      const label = document.createElement('dt');
+      label.textContent = row.label;
+      const value = document.createElement('dd');
+      value.textContent = row.value;
+      table.append(label, value);
+    }
+    body.append(table);
+  }
+  return body;
+}
+
+function textSpan(text: string): HTMLElement {
+  const node = document.createElement('span');
+  node.textContent = text;
+  return node;
+}
+
+function missingChip(text: string): HTMLElement {
+  const chip = element('span', 'entity-missing');
+  chip.textContent = text;
+  return chip;
+}
+
+function sectionTitle(text: string, className = 'aeo-title'): HTMLElement {
+  const title = element('h3', className);
+  title.textContent = text;
+  return title;
+}
+
+function emptyNote(text: string): HTMLElement {
+  const note = element('p', 'aeo-empty');
+  note.textContent = text;
+  return note;
+}
+
+function stat(label: string, value: string, tone?: 'good' | 'bad'): HTMLElement {
+  const frame = element('div', 'aeo-stat');
+  if (tone !== undefined) frame.dataset.tone = tone;
+  const name = element('span', 'aeo-stat-label');
+  name.textContent = label;
+  const reading = element('strong', 'aeo-stat-value');
+  reading.textContent = value;
+  frame.append(name, reading);
+  return frame;
+}
+
+/** Re-indents a block so a one-line minified script is still readable. */
+function prettyJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+function severityRank(level: SeoFinding['level']): number {
+  return level === 'error' ? 0 : level === 'warning' ? 1 : 2;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
@@ -722,6 +1410,104 @@ export function createSeoSheetStyle(): HTMLStyleElement {
     .gg-url { color: #4d5156; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .gg-title { color: #1a0dab; font-size: 20px; line-height: 1.3; margin: 2px 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .gg-text { -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: #4d5156; display: -webkit-box; font-size: 14px; overflow: hidden; }
+    .gg-facts { align-items: center; color: #4d5156; display: flex; flex-wrap: wrap; font-size: 13px; gap: 4px 10px; margin-bottom: 3px; }
+    .gg-stars { color: #e7711b; letter-spacing: -.5px; }
+    .gg-score { color: #70757a; }
+    .gg-price { color: #202124; font-weight: 700; }
+    .gg-stock { color: #0d652d; }
+    .gg-byline { color: #70757a; }
+    .gg-faq { border-top: 1px solid #ecedef; margin-top: 8px; }
+    .gg-faq-row { border-bottom: 1px solid #ecedef; }
+    .gg-faq-row summary { color: #202124; cursor: pointer; font-size: 14px; list-style: none; padding: 8px 0; }
+    .gg-faq-row summary::-webkit-details-marker { display: none; }
+    .gg-faq-row summary::after { color: #70757a; content: '⌄'; float: right; }
+    .gg-faq-row[open] summary::after { content: '⌃'; }
+    .gg-faq-answer { color: #4d5156; font-size: 13px; margin: 0 0 9px; }
+
+    .schema-summary { color: #aeb7c5; font-size: 12px; margin: 0 0 14px; }
+    .schema-block { background: #12161d; border: 1px solid #272e39; border-left-width: 3px; border-radius: 9px; display: grid; gap: 9px; margin-bottom: 10px; padding: 12px 14px; }
+    .schema-block[data-state='parsed'] { border-left-color: #22c55e; }
+    .schema-block[data-state='invalid'] { border-left-color: #ef4444; }
+    .schema-block-head { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; }
+    .schema-index { color: #7f8998; font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+    .schema-type { background: #1b2350; border: 1px solid #4f46a5; border-radius: 5px; color: #ddd6fe; font: 700 11px/1.4 ui-sans-serif, system-ui, sans-serif; padding: 2px 7px; }
+    .schema-context { color: #7f8998; font: 10px/1.5 ui-monospace, SFMono-Regular, monospace; margin-left: auto; }
+    .schema-error { color: #fda4af; font: 11px/1.5 ui-monospace, SFMono-Regular, monospace; margin: 0; overflow-wrap: anywhere; }
+    .entity-card { background: #0b0e14; border: 1px solid #262e39; border-radius: 8px; display: grid; gap: 9px; padding: 11px 12px; }
+    .entity-label { align-items: center; display: flex; gap: 7px; }
+    .entity-badge { background: #0e4a5a; border: 1px solid #22d3ee; border-radius: 999px; color: #cffafe; font: 700 9px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .06em; padding: 2px 8px; text-transform: uppercase; }
+    .entity-row { display: grid; gap: 11px; grid-template-columns: auto minmax(0, 1fr); }
+    .entity-body { display: grid; gap: 5px; min-width: 0; }
+    .entity-name { color: #e8eaed; font-size: 14px; overflow-wrap: anywhere; }
+    .entity-name[data-missing='true'] { color: #fda4af; font-style: italic; }
+    .entity-text { -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: #98a2b1; display: -webkit-box; font-size: 12px; overflow: hidden; }
+    .entity-thumb { aspect-ratio: 1; border-radius: 6px; flex: 0 0 auto; overflow: hidden; position: relative; width: 84px; }
+    .entity-thumb-wide { aspect-ratio: 1.6; width: 128px; }
+    .entity-thumb img { height: 100%; object-fit: cover; width: 100%; }
+    .entity-duration { background: rgb(0 0 0 / .78); border-radius: 3px; bottom: 4px; color: #fff; font: 600 9px/1.4 ui-sans-serif, system-ui, sans-serif; padding: 1px 4px; position: absolute; right: 4px; }
+    .entity-rating, .entity-price-row, .entity-byline { align-items: center; display: flex; flex-wrap: wrap; gap: 4px 9px; }
+    .entity-byline { color: #8c94a3; font-size: 11px; }
+    .entity-price { color: #f8fafc; font-size: 15px; font-weight: 700; }
+    .entity-stock { color: #86efac; font-size: 11px; }
+    .entity-meta { color: #7f8998; font-size: 11px; }
+    .entity-missing { background: #35191d; border: 1px solid #713039; border-radius: 4px; color: #fda4af; font: 700 9px/1.4 ui-sans-serif, system-ui, sans-serif; padding: 2px 6px; }
+    .entity-date { align-items: center; background: #151b23; border: 1px solid #2d3440; border-radius: 7px; display: grid; height: 58px; justify-items: center; width: 58px; }
+    .entity-date[data-missing='true'] { border-color: #713039; color: #fda4af; }
+    .entity-date-month { color: #fda4af; font: 700 9px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .08em; }
+    .entity-date-day { color: #e8eaed; font: 700 20px/1 ui-sans-serif, system-ui, sans-serif; }
+    .entity-logo { align-items: center; background: #151b23; border: 1px solid #2d3440; border-radius: 50%; display: flex; height: 52px; justify-content: center; overflow: hidden; width: 52px; }
+    .entity-logo img { height: 60%; object-fit: contain; width: 60%; }
+    .entity-trail { align-items: center; color: #d9dce3; display: flex; flex-wrap: wrap; font-size: 12px; gap: 5px; }
+    .entity-crumb[data-missing='true'] { color: #fcd34d; text-decoration: underline dotted; }
+    .entity-crumb-sep { color: #6b7280; }
+    .entity-sameas { display: flex; flex-wrap: wrap; gap: 5px; }
+    .entity-link { background: #1d2330; border: 1px solid #343d4a; border-radius: 4px; color: #a5f3fc; font: 10px/1.5 ui-monospace, SFMono-Regular, monospace; padding: 1px 6px; }
+    .entity-fields { display: grid; gap: 3px 12px; grid-template-columns: minmax(80px, auto) minmax(0, 1fr); margin: 3px 0 0; }
+    .entity-fields dt { color: #7f8998; font: 10px/1.6 ui-monospace, SFMono-Regular, monospace; }
+    .entity-fields dd { color: #d9dce3; font-size: 11px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .entity-faq .gg-faq-row { border-bottom-color: #262e39; }
+    .entity-faq .gg-faq-row summary { color: #d9dce3; font-size: 12px; }
+    .entity-faq .gg-faq-answer { color: #98a2b1; font-size: 11px; }
+    .entity-faq .gg-faq-answer[data-missing='true'] { color: #fda4af; font-style: italic; }
+
+    .aeo-intro { color: #aeb7c5; font-size: 12px; margin: 0 0 16px; max-width: 70ch; }
+    .aeo-block { background: #12161d; border: 1px solid #272e39; border-radius: 10px; margin-bottom: 16px; padding: 14px 16px; }
+    .aeo-title { color: #f8fafc; font-size: 12px; letter-spacing: .05em; margin: 0 0 11px; text-transform: uppercase; }
+    .aeo-subtitle { color: #8c94a3; font-size: 10px; letter-spacing: .07em; margin: 16px 0 8px; text-transform: uppercase; }
+    .aeo-subject { align-items: center; background: #0b0e14; border: 1px solid #262e39; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 12px; padding: 10px 12px; }
+    .aeo-subject[data-state='missing'] { border-color: #78551c; color: #fcd34d; font-size: 12px; }
+    .aeo-subject-type { background: #0e4a5a; border: 1px solid #22d3ee; border-radius: 999px; color: #cffafe; font: 700 9px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .06em; padding: 2px 8px; text-transform: uppercase; }
+    .aeo-subject-name { color: #e8eaed; font-size: 14px; }
+    .aeo-facts { display: grid; gap: 4px 14px; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); margin: 0; }
+    .aeo-facts dt { color: #7f8998; font-size: 11px; }
+    .aeo-facts dd { align-items: center; color: #e8eaed; display: flex; flex-wrap: wrap; font-size: 12px; gap: 7px; margin: 0; }
+    .aeo-source { border-radius: 4px; font: 700 8px/1.5 ui-sans-serif, system-ui, sans-serif; letter-spacing: .06em; padding: 1px 5px; text-transform: uppercase; }
+    .aeo-source[data-source='schema'] { background: #102c22; border: 1px solid #225b45; color: #86efac; }
+    .aeo-source[data-source='meta'] { background: #1d2330; border: 1px solid #343d4a; color: #8c94a3; }
+    .aeo-empty { color: #8c94a3; font-size: 11px; margin: 0; }
+    .aeo-qa { border-left: 2px solid #343d4a; margin-bottom: 9px; padding-left: 10px; }
+    .aeo-question { align-items: center; color: #d9dce3; display: flex; flex-wrap: wrap; font-size: 12px; gap: 7px; }
+    .aeo-answer-text { color: #8c94a3; font-size: 11px; margin: 3px 0 0; }
+    .aeo-stats { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-top: 16px; }
+    .aeo-stat { background: #0b0e14; border: 1px solid #262e39; border-radius: 7px; display: grid; gap: 3px; padding: 8px 10px; }
+    .aeo-stat[data-tone='good'] { border-color: #225b45; }
+    .aeo-stat[data-tone='bad'] { border-color: #713039; }
+    .aeo-stat-label { color: #7f8998; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+    .aeo-stat-value { color: #e8eaed; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .aeo-stat[data-tone='bad'] .aeo-stat-value { color: #fda4af; }
+    .aeo-answer { background: #0b0e14; border: 1px solid #262e39; border-left-width: 3px; border-radius: 8px; padding: 12px 14px; }
+    .aeo-answer[data-grounding='strong'] { border-left-color: #22c55e; }
+    .aeo-answer[data-grounding='partial'] { border-left-color: #f59e0b; }
+    .aeo-answer[data-grounding='thin'] { border-left-color: #ef4444; }
+    .aeo-sentence { color: #e8eaed; font-size: 14px; line-height: 1.5; margin: 0; }
+    .aeo-cite { align-items: center; display: flex; gap: 10px; margin-top: 9px; }
+    .aeo-cite-source { color: #7dd3fc; font-size: 11px; }
+    .aeo-grounding { color: #7f8998; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+    .aeo-caveat { color: #7f8998; font-size: 11px; margin: 11px 0 0; max-width: 70ch; }
+    .aeo-findings-note { color: #aeb7c5; font-size: 12px; margin: 0; }
+    .schema-source summary { color: #8c94a3; cursor: pointer; font-size: 11px; }
+    .schema-source pre { background: #090c11; border: 1px solid #303744; border-radius: 7px; color: #dbeafe; font: 10px/1.5 ui-monospace, SFMono-Regular, monospace; margin: 8px 0 0; max-height: 320px; overflow: auto; padding: 10px; }
+    .seo-clean-mark[data-tone='neutral'] { background: #1d2330; border-color: #343d4a; color: #c4b5fd; font: 700 15px/1 ui-monospace, SFMono-Regular, monospace; }
 
     .seo-issues-bar { align-items: center; background: #12161d; border: 1px solid #272e39; border-radius: 10px; display: flex; gap: 16px; justify-content: space-between; margin-bottom: 16px; padding: 12px 14px; }
     .seo-issues-summary { color: #aeb7c5; font-size: 12px; margin: 0; }

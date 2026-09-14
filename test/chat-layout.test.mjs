@@ -422,6 +422,255 @@ test('the share preview reads the live page and hands findings to the agent', ()
   } finally { cleanup(); }
 });
 
+test('the Google card renders what the page’s JSON-LD produces', () => {
+  const schema = JSON.stringify([
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Torque Wrench 200Nm',
+      offers: { '@type': 'Offer', price: '189.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' },
+      aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Tools', item: 'https://example.com/tools' },
+        { '@type': 'ListItem', position: 2, name: 'Torque Wrench' },
+      ],
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [{ '@type': 'Question', name: 'What torque range?', acceptedAnswer: { '@type': 'Answer', text: '20 to 200 Nm.' } }],
+    },
+  ]);
+  const cleanup = installDom('', `<title>Torque Wrench 200Nm</title><script type="application/ld+json">${schema}</script>`);
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.configure({ networks: ['google', 'facebook'] });
+    sheet.open();
+
+    const google = sheet.element.querySelector('.seo-card[data-network="google"]');
+    assert.match(google.querySelector('.gg-url').textContent, /Tools › Torque Wrench/);
+    assert.match(google.querySelector('.gg-stars').textContent, /★/);
+    assert.match(google.querySelector('.gg-score').textContent, /4\.6 \(128\)/);
+    assert.equal(google.querySelector('.gg-price').textContent, '$189.00');
+    assert.equal(google.querySelector('.gg-stock').textContent, 'In Stock');
+    assert.equal(google.querySelector('.gg-faq-row summary').textContent, 'What torque range?');
+
+    // Only Google renders rich results; the other cards are untouched.
+    assert.equal(sheet.element.querySelector('.seo-card[data-network="facebook"] .gg-stars'), null);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the Schema pane lists each block and its findings reach Issues', () => {
+  const cleanup = installDom('', `
+    <title>Broken schema</title>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article"}</script>
+    <script type="application/ld+json">{ not json }</script>
+  `);
+  try {
+    const fixes = [];
+    const sheet = new SeoPreviewSheet({ onFix(context) { fixes.push(context); } });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+
+    sheet.showPane('schema');
+    const blocks = [...sheet.element.querySelectorAll('.schema-block')];
+    assert.equal(blocks.length, 2);
+    assert.deepEqual(blocks.map((block) => block.dataset.state), ['parsed', 'invalid']);
+    assert.equal(blocks[0].querySelector('.schema-type').textContent, 'Article');
+    assert.notEqual(blocks[1].querySelector('.schema-error'), null);
+
+    // Schema problems are ordinary findings, sorted in with the meta-tag ones.
+    sheet.showPane('issues');
+    const titles = [...sheet.element.querySelectorAll('.seo-finding-title')].map((node) => node.textContent);
+    assert.equal(titles.some((title) => /not valid JSON/.test(title)), true);
+    assert.equal(titles.some((title) => /Article is missing headline/.test(title)), true);
+    assert.equal(titles.some((title) => /og:image/.test(title)), true, 'meta findings are still there');
+
+    // Fixing a schema finding hands the agent the JSON as well as the tags.
+    const row = [...sheet.element.querySelectorAll('.seo-finding')]
+      .find((item) => /not valid JSON/.test(item.querySelector('.seo-finding-title').textContent));
+    row.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(fixes[0].kind, 'seo');
+    assert.match(fixes[0].message, /Structured data: 2 blocks/);
+    assert.match(fixes[0].message, /block 2: unparseable/);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the Schema pane draws each entity, with the JSON behind a toggle', () => {
+  const schema = JSON.stringify([
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Torque Wrench 200Nm',
+      offers: { '@type': 'Offer', price: '189.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' },
+      aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+      brand: { '@type': 'Brand', name: 'Acme Tools' },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Tools', item: 'https://example.com/tools' },
+        { '@type': 'ListItem', position: 2, name: 'Torque Wrench' },
+      ],
+    },
+    { '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'Astro AI', operatingSystem: 'macOS' },
+  ]);
+  const cleanup = installDom('', `<title>Torque Wrench</title><script type="application/ld+json">${schema}</script>`);
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('schema');
+
+    const cards = [...sheet.element.querySelectorAll('.entity-card')];
+    assert.deepEqual(cards.map((card) => card.dataset.type), ['Product', 'BreadcrumbList', 'SoftwareApplication']);
+
+    // A Product is drawn as a product, not as braces.
+    const product = cards[0];
+    assert.equal(product.querySelector('.entity-name').textContent, 'Torque Wrench 200Nm');
+    assert.equal(product.querySelector('.entity-price').textContent, '$189.00');
+    assert.equal(product.querySelector('.entity-stock').textContent, 'In Stock');
+    assert.match(product.querySelector('.gg-stars').textContent, /★/);
+    assert.match(product.querySelector('.entity-meta').textContent, /Acme Tools/);
+
+    // A trail is drawn as a trail, and marks the crumb that links nowhere.
+    assert.deepEqual(
+      [...cards[1].querySelectorAll('.entity-crumb')].map((crumb) => crumb.textContent),
+      ['Tools', 'Torque Wrench'],
+    );
+
+    // A type with no card of its own still shows its fields rather than nothing.
+    assert.equal(cards[2].querySelector('.entity-name').textContent, 'Astro AI');
+    assert.match(cards[2].querySelector('.entity-fields').textContent, /operatingSystem/);
+
+    // The JSON is still reachable, just no longer the first thing shown.
+    assert.equal(sheet.element.querySelectorAll('.schema-source pre').length, 1);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('a Product with no price says so on the card', () => {
+  const schema = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: 'Torque Wrench',
+    offers: { '@type': 'Offer', priceCurrency: 'USD' },
+  });
+  const cleanup = installDom('', `<title>x</title><script type="application/ld+json">${schema}</script>`);
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('schema');
+
+    assert.equal(sheet.element.querySelector('.entity-missing').textContent, 'no price');
+    assert.equal(sheet.element.querySelector('.entity-price'), null);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the AEO pane shows what an answer engine can take, and the answer it affords', () => {
+  const schema = JSON.stringify([
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Torque Wrench 200Nm',
+      offers: { '@type': 'Offer', price: '189.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' },
+      aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [{ '@type': 'Question', name: 'What torque range?', acceptedAnswer: { '@type': 'Answer', text: '20 to 200 Nm.' } }],
+    },
+  ]);
+  const cleanup = installDom(
+    '<main><h1>Torque Wrench</h1><p>Calibrated to 200 Nm.</p></main>',
+    `<title>Torque Wrench 200Nm</title><script type="application/ld+json">${schema}</script>`,
+  );
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('aeo');
+
+    assert.equal(sheet.element.querySelector('.aeo-subject-type').textContent, 'Product');
+    assert.equal(sheet.element.querySelector('.aeo-subject-name').textContent, 'Torque Wrench 200Nm');
+
+    const facts = sheet.element.querySelector('.aeo-facts').textContent;
+    assert.match(facts, /Price/);
+    assert.match(facts, /USD 189\.00/);
+    // A fact from schema is marked apart from one read out of a meta tag.
+    assert.match(sheet.element.querySelector('.aeo-source').textContent, /structured/);
+
+    assert.equal(sheet.element.querySelector('.aeo-question').textContent, 'What torque range?FAQ schema');
+
+    const answer = sheet.element.querySelector('.aeo-answer');
+    assert.equal(answer.dataset.grounding, 'strong');
+    assert.match(answer.querySelector('.aeo-sentence').textContent, /costs USD 189\.00/);
+    // The mock must never pass itself off as a model's output.
+    assert.match(sheet.element.querySelector('.aeo-caveat').textContent, /not generated by a model/);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('a page with nothing to quote says so rather than inventing an answer', () => {
+  const cleanup = installDom('<main><p>Hello.</p></main>', '<title>A page</title>');
+  try {
+    const fixes = [];
+    const sheet = new SeoPreviewSheet({ onFix(context) { fixes.push(context); } });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('aeo');
+
+    assert.equal(sheet.element.querySelector('.aeo-subject').dataset.state, 'missing');
+    assert.equal(sheet.element.querySelector('.aeo-answer').dataset.grounding, 'thin');
+    assert.match(sheet.element.querySelector('.aeo-findings-note').textContent, /limiting how quotable/);
+
+    // AEO findings are ordinary findings, and carry the extraction to the agent.
+    sheet.showPane('issues');
+    const row = [...sheet.element.querySelectorAll('.seo-finding')]
+      .find((item) => /no headings|readable text|quoted as a fact/i.test(item.querySelector('.seo-finding-title').textContent));
+    row.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+    assert.match(fixes[0].message, /What an answer engine can take/);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('a meta-only fix is not padded with JSON the agent need not read', () => {
+  const cleanup = installDom('', `
+    <title>A page</title>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"Person","name":"A"}</script>
+  `);
+  try {
+    const fixes = [];
+    const sheet = new SeoPreviewSheet({ onFix(context) { fixes.push(context); } });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('issues');
+
+    const row = [...sheet.element.querySelectorAll('.seo-finding')]
+      .find((item) => /No og:image/.test(item.querySelector('.seo-finding-title').textContent));
+    row.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+
+    assert.match(fixes[0].message, /og:image/);
+    assert.equal(/Structured data:/.test(fixes[0].message), false);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
 test('the share preview closes on Escape', () => {
   const cleanup = installDom();
   try {

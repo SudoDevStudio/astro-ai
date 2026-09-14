@@ -4,8 +4,9 @@ const { pathname } = Astro.url;
 const fixtures = [
 	{ href: '/seo/', label: 'Overview', state: '1 warning' },
 	{ href: '/seo/clean/', label: 'Clean', state: 'no issues' },
-	{ href: '/seo/broken/', label: 'Broken', state: '3 errors' },
-	{ href: '/seo/minimal/', label: 'Bare head', state: '3 errors' },
+	{ href: '/seo/rich/', label: 'Rich result', state: 'no issues' },
+	{ href: '/seo/broken/', label: 'Broken', state: 'errors' },
+	{ href: '/seo/minimal/', label: 'Bare head', state: 'errors' },
 ];
 ---
 

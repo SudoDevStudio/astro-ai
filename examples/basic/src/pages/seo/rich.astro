@@ -1,0 +1,158 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import SeoNav from '../../components/SeoNav.astro';
+
+const origin = Astro.site ?? Astro.url.origin;
+const url = new URL('/seo/rich/', origin).href;
+const image = new URL('/og/card.png', origin).href;
+
+// Four blocks that between them produce every extra a Google result can show:
+// a trail above the title, stars and a price beside it, and questions beneath.
+// Each one is complete, so the preview reports nothing and renders everything.
+const schema = [
+	{
+		'@context': 'https://schema.org',
+		'@type': 'Product',
+		name: 'Torque Wrench 200Nm',
+		description: 'Calibrated to 200 Nm, with a certificate valid for twelve months.',
+		image,
+		url,
+		sku: 'SKU-1001',
+		brand: { '@type': 'Brand', name: 'Acme Tools' },
+		offers: {
+			'@type': 'Offer',
+			price: '189.00',
+			priceCurrency: 'USD',
+			availability: 'https://schema.org/InStock',
+			url,
+		},
+		aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+	},
+	{
+		'@context': 'https://schema.org',
+		'@type': 'BreadcrumbList',
+		itemListElement: [
+			{ '@type': 'ListItem', position: 1, name: 'Tools', item: new URL('/catalog/', origin).href },
+			{ '@type': 'ListItem', position: 2, name: 'Wrenches', item: new URL('/catalog/', origin).href },
+			// The last crumb is the page itself, so it needs no link of its own.
+			{ '@type': 'ListItem', position: 3, name: 'Torque Wrench 200Nm' },
+		],
+	},
+	{
+		'@context': 'https://schema.org',
+		'@type': 'FAQPage',
+		mainEntity: [
+			{
+				'@type': 'Question',
+				name: 'What torque range does it cover?',
+				acceptedAnswer: { '@type': 'Answer', text: '<p>20 to 200 Nm, in 1 Nm increments.</p>' },
+			},
+			{
+				'@type': 'Question',
+				name: 'How often does it need recalibrating?',
+				acceptedAnswer: { '@type': 'Answer', text: 'Once a year, or after any drop.' },
+			},
+		],
+	},
+	{
+		'@context': 'https://schema.org',
+		'@type': 'Organization',
+		name: 'Acme Tools',
+		url: new URL('/', origin).href,
+		logo: new URL('/favicon.svg', origin).href,
+		sameAs: ['https://github.com/SudoDevStudio/astro-ai'],
+	},
+];
+---
+
+<Layout
+	title="Torque Wrench 200Nm"
+	lede="A product page whose JSON-LD produces every extra a search result can show."
+	seo={{
+		description: 'Calibrated to 200 Nm, with a certificate valid for twelve months. Rated 4.6 by 128 buyers.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		schema,
+	}}
+>
+	<SeoNav />
+
+	<Callout title="What to try" tone="accent">
+		Open the share preview and look at the <strong>Google</strong> card. The
+		trail, the stars, the price, the stock line, and the two questions are all
+		read from this page's JSON-LD — none of them can be expressed with meta
+		tags. The other seven cards are unchanged, because no other network reads
+		structured data.
+	</Callout>
+
+	<section class="panel" aria-label="What each block contributes">
+		<h2>Four blocks, four contributions</h2>
+		<dl>
+			<dt>Product</dt>
+			<dd>
+				<code>offers.price</code> and <code>priceCurrency</code> put the price in
+				the result, <code>availability</code> adds the stock line, and
+				<code>aggregateRating</code> adds the stars and the review count. Drop
+				any one of them and that part of the result quietly disappears.
+			</dd>
+
+			<dt>BreadcrumbList</dt>
+			<dd>
+				Replaces the URL under the title with a readable trail. The last crumb is
+				the page itself, so it carries no <code>item</code> link.
+			</dd>
+
+			<dt>FAQPage</dt>
+			<dd>
+				Adds the expandable questions. Answers are authored as HTML here, which
+				a result renders as plain text — the preview strips the tags the same way.
+			</dd>
+
+			<dt>Organization</dt>
+			<dd>
+				Supplies the site name beside the favicon, in place of the bare domain.
+			</dd>
+		</dl>
+	</section>
+
+	<Callout title="Try breaking one">
+		Delete <code>priceCurrency</code> from the offer and re-read the page. The
+		price vanishes from the card and an error appears on Issues saying why —
+		which is the whole difference between a preview and a validator.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px solid #14805e;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0 0 0.75rem;
+	}
+
+	dl {
+		display: grid;
+		gap: 0.75rem;
+		margin: 0;
+	}
+
+	dt {
+		color: #86efac;
+		font-weight: 700;
+	}
+
+	dd {
+		color: #aeb6c5;
+		margin: 0.2rem 0 0;
+	}
+
+	code {
+		color: #86efac;
+		font-family: ui-monospace, SFMono-Regular, monospace;
+	}
+</style>

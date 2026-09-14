@@ -65,20 +65,64 @@ The preview itself is configured with nothing at all. It reads the head of
 whatever page you are on, every time you open it, so these fixtures need only
 differ in their tags.
 
-`/seo/` holds four pages with deliberately different head metadata. Open a chat
+`/seo/` holds five pages with deliberately different head metadata. Open a chat
 window, press the green **SEO** button, and walk them:
 
 | Page | Reports | Why |
 | --- | --- | --- |
 | `/seo/` | 1 warning | `og:image` is 800×418: kept by every network, too small for the wide card. |
 | `/seo/clean/` | nothing | Every tag present and inside the limits each network truncates at. |
-| `/seo/broken/` | 3 errors, 4 warnings, 5 notes | Relative and 64×64 `og:image`, invalid `twitter:card`, `og:url` disagreeing with the canonical link, overlong title and description, `noindex`. |
-| `/seo/minimal/` | 3 errors, 4 warnings, 3 notes | A `<title>` and nothing else, so every card shows its fallback. |
+| `/seo/rich/` | nothing | Complete JSON-LD, so the Google card gains a trail, stars, a price and questions. |
+| `/seo/broken/` | 5 errors, 10 warnings, 5 notes | Relative and 64×64 `og:image`, invalid `twitter:card`, `og:url` disagreeing with the canonical link, overlong title and description, `noindex`, unparseable JSON-LD, and a Product with no price. |
+| `/seo/minimal/` | 3 errors, 4 warnings, 4 notes | A `<title>` and nothing else, so every card shows its fallback. |
 
 The head tags come from `src/components/Seo.astro`, driven by the `seo` prop each
 page passes to the layout. `seo={false}` emits nothing but a `<title>`, and
 `htmlLang={false}` drops the `lang` attribute — both only exist so the bare
 fixture can be bare.
+
+#### Structured data
+
+`/seo/rich/` is the page to open first. Its four JSON-LD blocks between them
+produce every extra a Google result can show, and the **Google** card renders
+each one:
+
+| Block | What appears on the card |
+| --- | --- |
+| `Product` | ★★★★☆ 4.6 (128), `$189.00`, and an In Stock line |
+| `BreadcrumbList` | `acme.com › Tools › Wrenches › Torque Wrench` in place of the URL |
+| `FAQPage` | Two expandable questions beneath the snippet |
+| `Organization` | The site name beside the favicon, instead of the bare domain |
+
+None of that can be expressed with meta tags, and no other network reads it —
+the seven other cards are unchanged. Delete `priceCurrency` from the offer and
+re-read the page: the price disappears from the card and an error appears on
+**Issues** saying why.
+
+The **Schema** tab draws each of those blocks as the thing it describes — the
+Product as a product, the trail as a trail — with the JSON behind a toggle, so
+nothing here needs reading braces to check.
+
+The **AEO** tab answers a different question: what an assistant can take from
+the page. `/seo/rich/` is the only fixture that satisfies it completely — a
+named subject, six facts liftable straight from schema, two quotable Q&A pairs,
+and a publisher — so the answer it affords reads:
+
+> Torque Wrench 200Nm costs USD 189.00, is rated 4.6 out of 5 from 128 reviews
+> and is listed as in stock.
+
+Walk to `/seo/minimal/` and the same panel reports no subject, no facts, and no
+canonical URL to cite, and the sentence becomes *"the page states no fact an
+assistant could quote beyond its title."* That contrast is the point of the tab.
+
+`/seo/broken/` ships two blocks worth reading: one with a trailing comma, which
+every editor tolerates and no crawler does, and one describing a product the
+page is not about, with no price. The **Schema** tab shows both, marked by
+whether they parsed.
+
+Every other page carries `schema: 'auto'`, which builds a `WebPage` and an
+`Organization` from the same values as the meta tags — so the schema agrees
+with the page by construction, which is exactly what the preview checks.
 
 `Seo.astro` builds absolute URLs from `Astro.site ?? Astro.url.origin`. This
 example deliberately leaves `site` unset, so they resolve against the dev server

@@ -28,11 +28,36 @@ const {
 	robots,
 	themeColor = '#0d1015',
 	favicon = true,
+	schema = 'auto',
 } = Astro.props;
 
 const absolute = (path: string) => new URL(path, Astro.site ?? Astro.url.origin).href;
 const canonicalUrl = canonical ?? absolute(Astro.url.pathname);
 const imageUrl = image === undefined ? undefined : relativeImage ? image : absolute(image);
+
+// Built from the same values as the tags above, so the two agree. A schema that
+// contradicts the page it sits on is a finding, not a detail.
+const autoSchema = [
+	{
+		'@context': 'https://schema.org',
+		'@type': 'WebPage',
+		name: title,
+		url: canonicalUrl,
+		...(description === undefined ? {} : { description }),
+		...(imageUrl === undefined ? {} : { image: imageUrl }),
+	},
+	{
+		'@context': 'https://schema.org',
+		'@type': 'Organization',
+		name: siteName === false ? 'astro-ai example' : siteName,
+		url: absolute('/'),
+		logo: absolute('/favicon.svg'),
+		sameAs: ['https://github.com/SudoDevStudio/astro-ai'],
+	},
+];
+
+const blocks: string[] = (schema === 'auto' ? autoSchema : Array.isArray(schema) ? schema : [schema])
+	.map((entry) => (typeof entry === 'string' ? entry : JSON.stringify(entry, null, 2)));
 ---
 
 <title>{title}</title>
@@ -57,3 +82,10 @@ const imageUrl = image === undefined ? undefined : relativeImage ? image : absol
 {twitterCard && description && <meta name="twitter:description" content={description} />}
 {twitterCard && imageUrl && <meta name="twitter:image" content={imageUrl} />}
 {twitterCard && imageUrl && imageAlt && <meta name="twitter:image:alt" content={imageAlt} />}
+
+{
+	/* `is:inline` keeps Astro from treating structured data as a client script. */
+	blocks.map((block) => (
+		<script is:inline type="application/ld+json" set:html={block} />
+	))
+}

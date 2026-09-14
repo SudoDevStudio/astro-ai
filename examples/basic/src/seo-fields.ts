@@ -6,6 +6,13 @@
  * and one with almost nothing. A real site would hardcode its own defaults in
  * `Seo.astro` and expose two or three props.
  */
+/**
+ * One `<script type="application/ld+json">` block. An object is serialised; a
+ * string is emitted exactly as written, which is how a fixture ships JSON that
+ * does not parse.
+ */
+export type SchemaBlock = string | Record<string, unknown>;
+
 export type SeoFields = {
   description?: string;
   /** Site-relative path, made absolute unless `relativeImage` is set. */
@@ -28,4 +35,14 @@ export type SeoFields = {
   robots?: string;
   themeColor?: string | false;
   favicon?: boolean;
+  /**
+   * JSON-LD for this page.
+   *
+   * `'auto'` builds a WebPage and an Organization from the values above, so the
+   * schema agrees with the tags by construction — which is the point, since a
+   * schema that contradicts its own page is one of the things the share preview
+   * reports. Pass objects instead to describe something richer, or a string to
+   * emit it verbatim, which is how the broken fixture ships invalid JSON.
+   */
+  schema?: 'auto' | SchemaBlock | SchemaBlock[];
 };

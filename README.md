@@ -56,6 +56,10 @@ codex login
 - Preview the current route as a shared link on X, Facebook, LinkedIn,
   Instagram, Discord, Slack, WhatsApp, and Google, with an audit of what will
   be wrong and **Fix with AI** on each finding.
+- Read the page's JSON-LD as rendered entities, see the rich result it produces,
+  and be told what each missing property costs.
+- See what an answer engine can take from the page — its subject, quotable
+  facts, Q&A pairs, provenance, and how much text survives without JavaScript.
 - Float the chat windows over the page or dock them to a side column with tabs.
 
 ## Share preview
@@ -74,6 +78,33 @@ relative `og:image` no crawler can fetch, an image that loads at 64px despite
 declaring 1200×630, an `og:url` that disagrees with the canonical link. Each
 finding names the networks it affects, and **Fix with AI** sends it to the agent
 with the current tag values.
+
+**Schema** draws the page's JSON-LD as the things it describes — a Product with
+its price and stars, an Article with its byline and date, a breadcrumb trail as a
+trail — rather than as braces to read. A type with no shape of its own falls back
+to labelled fields instead of being guessed at, and the raw JSON stays one click
+away. It reads the page's JSON-LD. Structured data is the half of SEO meta
+tags cannot express — it is what turns a blue link into a result with
+breadcrumbs, stars, a price, or expandable questions — and the half that fails
+silently, since a missing `offers.price` costs the price and says nothing. The
+Google card renders what the schema actually produces, and the findings say what
+each gap costs: an unparseable block, a `Product` with no price or rating, a
+`BreadcrumbList` crumb with no name, a `FAQPage` question with no answer, a
+headline past the length Google reads, or a schema that describes a different
+page than the one it sits on.
+
+**AEO** is the other half. Search shows your page; an answer engine reads it,
+states what it says, and cites you if it can. Those are different jobs, and a
+page can be excellent at the first and useless at the second. The tab shows what
+an engine has to work with: the subject it can name, the facts it can lift
+verbatim (marked by whether they came from structured data or from a meta tag),
+the question and answer pairs it can quote, the provenance that makes a citation
+possible, and how much of the text exists *before* JavaScript runs — the page is
+fetched again as served, because most answer engines are not browsers.
+
+Alongside it is the answer the page affords, assembled from those extracted
+values by a template. It is not a model's output and says so: every clause is
+something the page states, so a thin sentence there means a thin page.
 
 **Tags** lists every title, meta, link, and `lang` value the page rendered,
 including duplicates that crawlers ignore.

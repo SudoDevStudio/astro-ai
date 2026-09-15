@@ -1,0 +1,131 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import { products } from '../../data/catalog';
+import {
+  breadcrumbSchema,
+  itemListSchema,
+  organizationSchema,
+  websiteSchema,
+} from '../../schema';
+
+const origin = Astro.site?.href ?? Astro.url.origin;
+
+const schema = [
+  itemListSchema(
+    origin,
+    products.map(({ name, slug }) => ({ name, path: `/shop/${slug}/` })),
+  ),
+  breadcrumbSchema(origin, [{ name: 'Home', path: '/' }, { name: 'Shop' }]),
+  // A WebSite with a SearchAction is what makes a sitelinks search box possible.
+  // It belongs on a page that owns the search, not on every page of the site.
+  websiteSchema(origin),
+  organizationSchema(origin),
+];
+---
+
+<Layout
+	title="Shop"
+	lede="Three products, one template, and the structured data a collection page needs."
+	seo={{
+		description:
+			'Torque wrenches, shielded cable and fall protection, with the ItemList, BreadcrumbList and SearchAction a collection page publishes.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		schema,
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		Open the share preview's <strong>Schema</strong> tab: an
+		<code>ItemList</code> is what makes a carousel possible, and the
+		<code>SearchAction</code> is what a sitelinks search box is built from.
+		Neither shows up on the Google card, because neither changes a single
+		result — they change the shape of the whole listing.
+	</Callout>
+
+	<section class="grid" aria-label="Products">
+		{
+			products.map((product) => (
+				<article class="card">
+					<h2><a href={`/shop/${product.slug}/`}>{product.name}</a></h2>
+					<p>{product.summary}</p>
+					<p class="meta">
+						<strong>${product.price}</strong>
+						{product.rating && <span class="rating">★ {product.rating.value}</span>}
+					</p>
+				</article>
+			))
+		}
+	</section>
+
+	<Callout title="One template, one cause">
+		All three product pages render through
+		<code>src/components/ProductPage.astro</code>. Audit the site and anything
+		that template gets wrong is reported once, as three routes under
+		<code>/shop/</code> — not as three separate problems to fix three times.
+	</Callout>
+
+	<p class="more">
+		Also on this site: <a href="/store/">the trade counter</a> as a
+		<code>LocalBusiness</code>, <a href="/guides/">buying guides</a> as
+		<code>BlogPosting</code>, and <a href="/careers/field-engineer/">a role</a>
+		as a <code>JobPosting</code>.
+	</p>
+</Layout>
+
+<style>
+	.grid {
+		display: grid;
+		gap: 0.75rem;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	}
+
+	.card {
+		border: 1px solid #14805e;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.4rem;
+		padding: 1rem;
+	}
+
+	h2 {
+		font-size: 1rem;
+		margin: 0;
+	}
+
+	h2 a {
+		color: #f8fafc;
+		text-decoration: none;
+	}
+
+	h2 a:hover {
+		color: #86efac;
+	}
+
+	p {
+		color: #aeb6c5;
+		margin: 0;
+	}
+
+	.meta {
+		align-items: baseline;
+		color: #f8fafc;
+		display: flex;
+		gap: 0.6rem;
+	}
+
+	.rating {
+		color: #fcd34d;
+		font-size: 0.85rem;
+	}
+
+	.more {
+		color: #aeb6c5;
+		font-size: 0.9rem;
+	}
+
+	.more a,
+	code {
+		color: #c4b5fd;
+	}
+</style>

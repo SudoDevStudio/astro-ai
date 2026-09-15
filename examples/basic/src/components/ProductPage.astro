@@ -1,0 +1,249 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+import { SITE_NAME, type Product } from '../data/catalog';
+import {
+  breadcrumbSchema,
+  faqSchema,
+  organizationSchema,
+  productSchema,
+  videoSchema,
+} from '../schema';
+
+/**
+ * One template behind every product page.
+ *
+ * All three products render through this, which is what makes the Site tab
+ * interesting: a finding that appears on all of them has one cause, in here,
+ * and grouping by route shows it as `/shop/` rather than as three problems.
+ */
+type Props = { product: Product };
+
+const { product } = Astro.props;
+const origin = Astro.site?.href ?? Astro.url.origin;
+
+const schema = [
+  productSchema(origin, product),
+  breadcrumbSchema(origin, [
+    { name: 'Home', path: '/' },
+    { name: 'Shop', path: '/shop/' },
+    { name: product.name },
+  ]),
+  faqSchema(product.faq),
+  organizationSchema(origin),
+  videoSchema(origin, product),
+].filter((block): block is Record<string, unknown> => block !== undefined);
+
+const availability = product.availability.replace(/([a-z])([A-Z])/g, '$1 $2');
+---
+
+<Layout
+	title={product.name}
+	lede={product.summary}
+	seo={{
+		description: product.summary,
+		image: product.image,
+		imageAlt: product.imageAlt,
+		ogType: 'product',
+		schema,
+	}}
+>
+	<nav class="crumbs" aria-label="Breadcrumb">
+		<a href="/">Home</a><span>›</span><a href="/shop/">Shop</a><span>›</span>
+		<span aria-current="page">{product.name}</span>
+	</nav>
+
+	<section class="product" aria-label="Product detail">
+		<div class="price-row">
+			<strong class="price">${product.price}</strong>
+			<span class="availability" data-state={product.availability}>{availability}</span>
+			{
+				product.rating && (
+					<span class="rating">
+						★ {product.rating.value} · {product.rating.count} reviews
+					</span>
+				)
+			}
+		</div>
+		<p>{product.description}</p>
+		<dl class="specs">
+			{
+				product.specifications.map(({ label, value }) => (
+					<div class="spec">
+						<dt>{label}</dt>
+						<dd>{value}</dd>
+					</div>
+				))
+			}
+		</dl>
+		<p class="seller">Sold by {SITE_NAME} · <a href="/store/">collect at the trade counter</a></p>
+	</section>
+
+	{
+		product.video && (
+			<section class="panel" aria-label="Product video">
+				<h2>{product.video.name}</h2>
+				<p>{product.video.description}</p>
+				<p class="hint">
+					Declared as a <code>VideoObject</code> with a duration and an upload
+					date, which is what puts a thumbnail and a runtime on the result.
+				</p>
+			</section>
+		)
+	}
+
+	<section class="panel" aria-label="Frequently asked questions">
+		<h2>Questions about this product</h2>
+		{
+			product.faq.map(({ question, answer }) => (
+				<div class="qa">
+					<h3>{question}</h3>
+					<p>{answer}</p>
+				</div>
+			))
+		}
+	</section>
+
+	<Callout title="What to try" tone="accent">
+		Open the share preview. <strong>Schema</strong> draws five entities for this
+		one page; <strong>AEO</strong> shows the facts an assistant can lift and the
+		answer they afford. Then open <strong>Site</strong> and audit everything —
+		whatever this template gets wrong shows up once, for all three products,
+		rather than three times.
+	</Callout>
+</Layout>
+
+<style>
+	.crumbs {
+		align-items: center;
+		color: #aeb6c5;
+		display: flex;
+		flex-wrap: wrap;
+		font-size: 0.85rem;
+		gap: 0.4rem;
+	}
+
+	.crumbs a {
+		color: #c4b5fd;
+		text-decoration: none;
+	}
+
+	.product,
+	.panel {
+		border: 1px solid #262b35;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.75rem;
+		padding: 1.25rem;
+	}
+
+	.product {
+		border-color: #14805e;
+	}
+
+	.price-row {
+		align-items: baseline;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+	}
+
+	.price {
+		font-size: 1.6rem;
+	}
+
+	.availability {
+		border-radius: 999px;
+		font-size: 0.8rem;
+		padding: 0.15rem 0.6rem;
+	}
+
+	.availability[data-state='InStock'] {
+		background: #102c22;
+		color: #86efac;
+	}
+
+	.availability[data-state='BackOrder'],
+	.availability[data-state='PreOrder'] {
+		background: #33270f;
+		color: #fcd34d;
+	}
+
+	.availability[data-state='OutOfStock'] {
+		background: #35191d;
+		color: #fda4af;
+	}
+
+	.rating {
+		color: #fcd34d;
+		font-size: 0.85rem;
+	}
+
+	.specs {
+		display: grid;
+		gap: 0.4rem;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		margin: 0;
+	}
+
+	.spec {
+		border-left: 2px solid #2d3440;
+		padding-left: 0.6rem;
+	}
+
+	.spec dt {
+		color: #7f8998;
+		font-size: 0.75rem;
+		text-transform: uppercase;
+	}
+
+	.spec dd {
+		margin: 0.1rem 0 0;
+	}
+
+	.seller {
+		color: #aeb6c5;
+		font-size: 0.85rem;
+		margin: 0;
+	}
+
+	.seller a {
+		color: #c4b5fd;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0;
+	}
+
+	h3 {
+		font-size: 0.95rem;
+		margin: 0;
+	}
+
+	.qa {
+		border-top: 1px solid #262b35;
+		display: grid;
+		gap: 0.3rem;
+		padding-top: 0.75rem;
+	}
+
+	.qa p {
+		color: #aeb6c5;
+		margin: 0;
+	}
+
+	.hint {
+		color: #aeb6c5;
+		font-size: 0.85rem;
+		margin: 0;
+	}
+
+	code {
+		color: #86efac;
+	}
+
+	p {
+		margin: 0;
+	}
+</style>

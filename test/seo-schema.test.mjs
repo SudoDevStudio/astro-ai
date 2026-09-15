@@ -399,3 +399,26 @@ test('a type with no card of its own keeps its remaining fields', () => {
     { label: 'operatingSystem', value: 'macOS, Linux' },
   ]);
 });
+
+test('a site name in front of the page title is not a contradiction either', () => {
+  // The site name is as often a prefix as a suffix, and reordering is not
+  // disagreement: both name the same page.
+  for (const pageTitle of [
+    'Acme Tools Trade Counter · astro-ai example',
+    'Trade Counter',
+    'Acme Tools Trade Counter',
+  ]) {
+    const findings = auditStructuredData(
+      read({ '@context': 'https://schema.org', '@type': 'Store', name: 'Acme Tools Trade Counter', address: 'x' }),
+      metadataFor(`<meta property="og:title" content="${pageTitle}">`),
+    );
+    assert.equal(find(findings, 'schema-title-mismatch'), undefined, pageTitle);
+  }
+
+  // A genuinely different subject is still reported.
+  const wrong = auditStructuredData(
+    read({ '@context': 'https://schema.org', '@type': 'Store', name: 'A different shop entirely', address: 'x' }),
+    metadataFor('<meta property="og:title" content="Acme Tools Trade Counter">'),
+  );
+  assert.equal(find(wrong, 'schema-title-mismatch').level, 'warning');
+});

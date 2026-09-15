@@ -30,6 +30,7 @@ export default defineConfig({
 | `maxRecoveryFiles` | `number` | `20` |
 | `allowNetworkAgent` | `boolean` | `false` |
 | `chatLayout` | `'floating' \| 'fixed'` | `'floating'` |
+| `dockSide` | `'right' \| 'bottom'` | `'right'` |
 | `seo` | `object \| false` | all networks |
 
 Nothing is required. `buildWithAI()` with no arguments gives you selection,
@@ -243,16 +244,41 @@ after which this setting stops applying, so you can change the project default
 without overriding anyone mid-session.
 
 Docking reflows normal flow with a margin on the root element, which cannot move
-your app's own `position: fixed` elements. The dock publishes its width as
-`--astro-ai-dock-width` on the root so you can offset them:
+your app's own `position: fixed` elements. The dock publishes the edge it holds
+on the root so you can offset them — `--astro-ai-dock-width` when it is on the
+right, `--astro-ai-dock-height` when it is along the bottom. Only the one that
+applies is set, so the other reads as absent:
 
 ```css
 .my-fixed-header {
   right: var(--astro-ai-dock-width, 0px);
 }
+
+.my-fixed-footer {
+  bottom: var(--astro-ai-dock-height, 0px);
+}
 ```
 
-Below 720px the dock becomes a bottom sheet and takes no column at all.
+Below 720px the dock is a bottom sheet whatever the setting, and takes no
+inset at all: there is no room to give a page at that width.
+
+## `dockSide`
+
+Which edge a docked chat holds.
+
+```js
+buildWithAI({ chatLayout: 'fixed', dockSide: 'bottom' });
+```
+
+`'right'` takes a column, which suits a desktop layout. `'bottom'` takes a strip
+across the bottom and leaves the page its full width — which is what you want
+while working on a mobile layout, where a column is the one thing the page
+cannot spare.
+
+The **Bottom** and **Right** button in the dock's header moves it at any time,
+and each edge remembers its own size: resizing the column does not change the
+height of the strip. Like `chatLayout`, this is a starting point — once someone
+moves the dock themselves, their choice wins for the rest of the session.
 
 ## `seo`
 

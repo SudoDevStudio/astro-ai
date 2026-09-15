@@ -8,6 +8,8 @@ import type { SelectionContext } from '../shared/selection-context.js';
 import {
   ChatDrawer,
   isNarrowViewport,
+  setToolButton,
+  toolButton,
   type AgentSubmit,
   type ChatLayout,
 } from './chat-drawer.js';
@@ -44,13 +46,27 @@ const SESSIONS_KEY = 'astro-ai:chat-sessions';
 const FOCUS_KEY = 'astro-ai:chat-focused';
 const LAYOUT_KEY = 'astro-ai:chat-layout';
 const DOCK_WIDTH_KEY = 'astro-ai:chat-dock-width';
+const DOCK_HEIGHT_KEY = 'astro-ai:chat-dock-height';
+const DOCK_SIDE_KEY = 'astro-ai:chat-dock-side';
 const DOCK_COLLAPSED_KEY = 'astro-ai:chat-dock-collapsed';
 export const MAX_CHAT_WINDOWS = 6;
 export const DOCK_MIN_WIDTH = 320;
 export const DOCK_MAX_WIDTH = 760;
 export const DOCK_DEFAULT_WIDTH = 420;
-/** Width of the collapsed dock rail, which still holds the expand control. */
+export const DOCK_MIN_HEIGHT = 200;
+export const DOCK_MAX_HEIGHT = 720;
+export const DOCK_DEFAULT_HEIGHT = 380;
+/** Thickness of the collapsed dock rail, which still holds the expand control. */
 export const DOCK_RAIL_WIDTH = 44;
+
+/**
+ * Which edge the dock holds.
+ *
+ * A column down the right suits a desktop layout. It is useless against a page
+ * being worked on at phone width, where the only spare room is horizontal —
+ * hence the bottom.
+ */
+export type DockSide = 'right' | 'bottom';
 
 /**
  * Owns every open chat window. Each window is an independent conversation with
@@ -83,10 +99,17 @@ export class ChatWindowManager {
   #layoutChosen: boolean;
   #seoAvailable = true;
   #dockWidth: number;
+  #dockHeight: number;
+  #dockSide: DockSide;
+  /** True once the user has moved the dock, which outranks the configured side. */
+  #dockSideChosen: boolean;
   #dockCollapsed: boolean;
-  #dockResizeFrom: { pointer: number; width: number } | undefined;
+  #dockResizeFrom: { pointer: number; size: number } | undefined;
+  readonly #dockSideButton: HTMLButtonElement;
   /** The inset currently applied to the page, so it is only rewritten on change. */
   #pageInset = 0;
+  /** Which edge that inset is on, since moving sides keeps the same number. */
+  #pageInsetSide: DockSide = 'right';
   /** What is selected on the page right now, so a new conversation can inherit it. */
   #liveSelection: { contexts: SelectionContext[]; elements: HTMLElement[] } = { contexts: [], elements: [] };
 
@@ -96,6 +119,10 @@ export class ChatWindowManager {
     this.#layoutChosen = storedLayout === 'fixed' || storedLayout === 'floating';
     this.#layout = storedLayout === 'fixed' ? 'fixed' : 'floating';
     this.#dockWidth = clampDockWidth(Number(readSession(DOCK_WIDTH_KEY)) || DOCK_DEFAULT_WIDTH);
+    this.#dockHeight = clampDockHeight(Number(readSession(DOCK_HEIGHT_KEY)) || DOCK_DEFAULT_HEIGHT);
+    const storedSide = readSession(DOCK_SIDE_KEY);
+    this.#dockSideChosen = storedSide === 'right' || storedSide === 'bottom';
+    this.#dockSide = storedSide === 'bottom' ? 'bottom' : 'right';
     this.#dockCollapsed = readSession(DOCK_COLLAPSED_KEY) === 'true';
     this.#pageStyle = document.createElement('style');
     this.#pageStyle.dataset.astroAi = 'dock-inset';
@@ -103,6 +130,7 @@ export class ChatWindowManager {
     this.element = document.createElement('div');
     this.element.className = 'ai-chat-windows';
     this.element.dataset.layout = this.#layout;
+    this.element.dataset.side = this.#dockSide;
     this.element.dataset.collapsed = String(this.#dockCollapsed);
 
     const grip = document.createElement('div');
@@ -121,8 +149,12 @@ export class ChatWindowManager {
     const newChat = dockButton('＋', 'Open another chat', () => {
       this.create();
     });
+    this.#dockSideButton = toolButton('⤓', 'Bottom', 'Move the dock to the bottom of the window', () => {
+      this.toggleDockSide();
+    });
+    this.#dockSideButton.classList.add('dock-side-button');
     this.#dockCollapse = dockButton('−', 'Collapse the chat dock', () => this.toggleDock());
-    dockActions.append(newChat, this.#dockCollapse);
+    dockActions.append(this.#dockSideButton, newChat, this.#dockCollapse);
     this.#dockHeader.append(this.#tabStrip, dockActions);
     this.#dockHeader.hidden = this.#layout !== 'fixed';
 
@@ -158,6 +190,14 @@ export class ChatWindowManager {
 
   get dockWidth(): number {
     return this.#dockWidth;
+  }
+
+  get dockHeight(): number {
+    return this.#dockHeight;
+  }
+
+  get dockSide(): DockSide {
+    return this.#dockSide;
   }
 
   sessionIds(): string[] {
@@ -316,6 +356,42 @@ export class ChatWindowManager {
     this.#dockWidth = clampDockWidth(width);
     writeSession(DOCK_WIDTH_KEY, String(this.#dockWidth));
     this.#syncDock();
+  }
+
+  setDockHeight(height: number): void {
+    this.#dockHeight = clampDockHeight(height);
+    writeSession(DOCK_HEIGHT_KEY, String(this.#dockHeight));
+    this.#syncDock();
+  }
+
+  /**
+   * Moves the dock between the right edge and the bottom.
+   *
+   * `persist` is false only for the configured default, so a project can
+   * declare a side without overriding someone who has since moved it.
+   */
+  setDockSide(side: DockSide, persist = true): void {
+    if (this.#dockSide === side) return;
+    this.#dockSide = side;
+    if (persist) {
+      this.#dockSideChosen = true;
+      writeSession(DOCK_SIDE_KEY, side);
+    }
+    this.element.dataset.side = side;
+    this.#syncDock();
+    // The page has a different edge back, so everything measured against the
+    // old one is now pointing at the wrong place.
+    this.#notifyPageReflow();
+  }
+
+  toggleDockSide(): void {
+    this.setDockSide(this.#dockSide === 'right' ? 'bottom' : 'right');
+  }
+
+  /** Applies the side from `astro.config.mjs`, unless the user moved it first. */
+  setDefaultDockSide(side: DockSide | undefined): void {
+    if (side === undefined || this.#dockSideChosen) return;
+    this.setDockSide(side, false);
   }
 
   setProvider(provider: ServerReadyMessage['agent']): void {
@@ -523,8 +599,22 @@ export class ChatWindowManager {
     this.#dockCollapse.title = this.#dockCollapsed ? 'Expand the chat dock' : 'Collapse the chat dock';
     this.#dockCollapse.setAttribute('aria-label', this.#dockCollapse.title);
     this.#dockCollapse.setAttribute('aria-expanded', String(!this.#dockCollapsed));
-    if (docked) this.element.style.setProperty('--dock-width', `${this.#dockWidth}px`);
-    else this.element.style.removeProperty('--dock-width');
+    this.#dockSideButton.hidden = !docked;
+    if (docked) {
+      setToolButton(
+        this.#dockSideButton,
+        this.#dockSide === 'right' ? '⤓' : '⇥',
+        this.#dockSide === 'right' ? 'Bottom' : 'Right',
+        this.#dockSide === 'right'
+          ? 'Move the dock to the bottom of the window'
+          : 'Move the dock to the right of the window',
+      );
+      this.element.style.setProperty('--dock-width', `${this.#dockWidth}px`);
+      this.element.style.setProperty('--dock-height', `${this.#dockHeight}px`);
+    } else {
+      this.element.style.removeProperty('--dock-width');
+      this.element.style.removeProperty('--dock-height');
+    }
     this.#applyPageInset();
   }
 
@@ -538,17 +628,30 @@ export class ChatWindowManager {
    * becomes a bottom sheet and takes no column at all.
    */
   #applyPageInset(): void {
-    const inset = this.#layout === 'fixed' && this.#visible && !isNarrowViewport()
-      ? this.#dockCollapsed ? DOCK_RAIL_WIDTH : this.#dockWidth
+    const docked = this.#layout === 'fixed' && this.#visible && !isNarrowViewport();
+    const inset = docked
+      ? this.#dockCollapsed
+        ? DOCK_RAIL_WIDTH
+        : this.#dockSide === 'bottom' ? this.#dockHeight : this.#dockWidth
       : 0;
-    if (inset === this.#pageInset && (inset === 0 || this.#pageStyle.isConnected)) return;
+    const side = this.#dockSide;
+    if (inset === this.#pageInset && side === this.#pageInsetSide && (inset === 0 || this.#pageStyle.isConnected)) {
+      return;
+    }
     this.#pageInset = inset;
+    this.#pageInsetSide = side;
+    const root = document.documentElement.style;
+    // Only the variable for the edge actually held is published, so a page
+    // offsetting its own fixed elements reads a width of zero when the dock is
+    // along the bottom rather than an inset that does not apply to it.
+    root.removeProperty('--astro-ai-dock-width');
+    root.removeProperty('--astro-ai-dock-height');
     if (inset === 0) {
       this.#pageStyle.remove();
-      document.documentElement.style.removeProperty('--astro-ai-dock-width');
     } else {
-      document.documentElement.style.setProperty('--astro-ai-dock-width', `${inset}px`);
-      this.#pageStyle.textContent = `html { margin-right: ${inset}px !important; }`;
+      const edge = side === 'bottom' ? 'bottom' : 'right';
+      root.setProperty(`--astro-ai-dock-${side === 'bottom' ? 'height' : 'width'}`, `${inset}px`);
+      this.#pageStyle.textContent = `html { margin-${edge}: ${inset}px !important; }`;
       if (!this.#pageStyle.isConnected) document.head.append(this.#pageStyle);
     }
     this.#notifyPageReflow();
@@ -573,7 +676,11 @@ export class ChatWindowManager {
   readonly #startDockResize = (event: PointerEvent): void => {
     if (event.button !== 0 || this.#layout !== 'fixed' || this.#dockCollapsed) return;
     event.preventDefault();
-    this.#dockResizeFrom = { pointer: event.clientX, width: this.#dockWidth };
+    const bottom = this.#dockSide === 'bottom';
+    this.#dockResizeFrom = {
+      pointer: bottom ? event.clientY : event.clientX,
+      size: bottom ? this.#dockHeight : this.#dockWidth,
+    };
     this.element.dataset.resizing = 'true';
     window.addEventListener('pointermove', this.#dockResizeMove);
     window.addEventListener('pointerup', this.#endDockResize, { once: true });
@@ -582,7 +689,10 @@ export class ChatWindowManager {
   readonly #dockResizeMove = (event: PointerEvent): void => {
     const from = this.#dockResizeFrom;
     if (from === undefined) return;
-    this.setDockWidth(from.width + (from.pointer - event.clientX));
+    // Both edges are dragged away from the viewport edge they sit on, so the
+    // dock grows as the pointer moves towards the middle of the window.
+    if (this.#dockSide === 'bottom') this.setDockHeight(from.size + (from.pointer - event.clientY));
+    else this.setDockWidth(from.size + (from.pointer - event.clientX));
   };
 
   readonly #endDockResize = (): void => {
@@ -610,6 +720,14 @@ export class ChatWindowManager {
       ),
     );
   }
+}
+
+export function clampDockHeight(height: number): number {
+  if (!Number.isFinite(height)) return DOCK_DEFAULT_HEIGHT;
+  const ceiling = typeof window === 'undefined'
+    ? DOCK_MAX_HEIGHT
+    : Math.min(DOCK_MAX_HEIGHT, Math.max(DOCK_MIN_HEIGHT, window.innerHeight - 140));
+  return Math.round(Math.min(Math.max(height, DOCK_MIN_HEIGHT), ceiling));
 }
 
 export function clampDockWidth(width: number): number {

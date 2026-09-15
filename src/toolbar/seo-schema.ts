@@ -243,6 +243,7 @@ export function auditStructuredData(data: StructuredData, metadata: PageMetadata
     if (block.error !== undefined) {
       add({
         id: `schema-invalid-json-${block.index}`,
+        code: `schema-invalid-json`,
         level: 'error',
         title: `Block ${block.index} is not valid JSON`,
         detail: `${block.error} A block that cannot be parsed is ignored in full, so everything it described is lost.`,
@@ -254,6 +255,7 @@ export function auditStructuredData(data: StructuredData, metadata: PageMetadata
     if (block.context === undefined) {
       add({
         id: `schema-no-context-${block.index}`,
+        code: `schema-no-context`,
         level: 'error',
         title: `Block ${block.index} has no @context`,
         detail: 'Without "@context": "https://schema.org" the vocabulary is undefined and the block is skipped.',
@@ -263,6 +265,7 @@ export function auditStructuredData(data: StructuredData, metadata: PageMetadata
     } else if (!/^https?:\/\/schema\.org\/?$/i.test(block.context)) {
       add({
         id: `schema-odd-context-${block.index}`,
+        code: `schema-odd-context`,
         level: 'warning',
         title: `Block ${block.index} declares an unusual @context`,
         detail: `"${block.context}" is not schema.org. Search engines only read the schema.org vocabulary here.`,
@@ -273,6 +276,7 @@ export function auditStructuredData(data: StructuredData, metadata: PageMetadata
     if (block.nodes.length === 0) {
       add({
         id: `schema-no-type-${block.index}`,
+        code: `schema-no-type`,
         level: 'error',
         title: `Block ${block.index} declares no @type`,
         detail: 'A node without a type describes nothing a search engine can act on.',
@@ -299,6 +303,7 @@ function auditNode(node: SchemaNode): SeoFinding[] {
     if (node.type !== '') {
       findings.push({
         id: `schema-unknown-type-${node.type}-${node.path}`,
+        code: `schema-unknown-type-${node.type}`,
         level: 'info',
         title: `${node.type} has no rich result rules here`,
         detail: 'The type is left alone: it is valid schema.org, it simply is not one of the types this preview knows how to check.',
@@ -313,6 +318,7 @@ function auditNode(node: SchemaNode): SeoFinding[] {
     if (hasProperty(node.value, property)) continue;
     findings.push({
       id: `schema-required-${node.type}-${property}-${node.path}`,
+      code: `schema-required-${node.type}-${property}`,
       level: 'error',
       title: `${node.type} is missing ${property}`,
       detail: `Required for this type. Without it the page loses ${rule.loses}.`,
@@ -324,6 +330,7 @@ function auditNode(node: SchemaNode): SeoFinding[] {
     if (hasProperty(node.value, property)) continue;
     findings.push({
       id: `schema-recommended-${node.type}-${property}-${node.path}`,
+      code: `schema-recommended-${node.type}-${property}`,
       level: 'warning',
       title: `${node.type} has no ${property}`,
       detail: `Recommended for this type. The result still appears, with less in it.`,
@@ -346,6 +353,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
     if (headline !== undefined && headline.length > HEADLINE_LIMIT) {
       findings.push({
         id: `schema-headline-long-${node.path}`,
+        code: `schema-headline-long`,
         level: 'warning',
         title: `headline is ${headline.length} characters`,
         detail: `Google stops reading an Article headline around ${HEADLINE_LIMIT}. Longer ones risk the rich result being dropped rather than trimmed.`,
@@ -357,6 +365,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
     if (author !== undefined && !namedEntity(author)) {
       findings.push({
         id: `schema-author-unnamed-${node.path}`,
+        code: `schema-author-unnamed`,
         level: 'warning',
         title: 'author has no name',
         detail: 'An author must be a Person or Organization carrying a name; a bare string or an empty object is not attributed.',
@@ -373,6 +382,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
     if (offers === undefined && rating === undefined && review === undefined) {
       findings.push({
         id: `schema-product-bare-${node.path}`,
+        code: `schema-product-bare`,
         level: 'error',
         title: 'Product has no offers, review, or aggregateRating',
         detail: 'A product needs at least one of these to qualify for a rich result. Name and image alone render as an ordinary link.',
@@ -385,6 +395,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
         if (hasProperty(offers, property)) continue;
         findings.push({
           id: `schema-offer-${property}-${node.path}`,
+          code: `schema-offer-${property}`,
           level: 'error',
           title: `offers is missing ${property}`,
           detail: 'An offer without both a price and its currency shows no price in the result.',
@@ -395,6 +406,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
       if (!hasProperty(offers, 'availability')) {
         findings.push({
           id: `schema-offer-availability-${node.path}`,
+          code: `schema-offer-availability`,
           level: 'warning',
           title: 'offers has no availability',
           detail: 'Without it the result cannot say In stock, which is among the first things a shopper reads.',
@@ -408,6 +420,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
         if (hasProperty(rating, property) || (property === 'reviewCount' && hasProperty(rating, 'ratingCount'))) continue;
         findings.push({
           id: `schema-rating-${property}-${node.path}`,
+          code: `schema-rating-${property}`,
           level: 'error',
           title: `aggregateRating is missing ${property}`,
           detail: 'A rating without both a value and a count is dropped rather than shown with a blank.',
@@ -423,6 +436,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
     if (items.length === 0 && hasProperty(node.value, 'itemListElement')) {
       findings.push({
         id: `schema-breadcrumb-empty-${node.path}`,
+        code: `schema-breadcrumb-empty`,
         level: 'error',
         title: 'BreadcrumbList has no items',
         detail: 'An empty itemListElement produces no trail at all.',
@@ -436,6 +450,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
       if (!hasProperty(entry, 'name')) {
         findings.push({
           id: `schema-breadcrumb-name-${position}-${node.path}`,
+          code: `schema-breadcrumb-name`,
           level: 'error',
           title: `Breadcrumb ${position + 1} has no name`,
           detail: 'Every crumb needs the text to display.',
@@ -446,6 +461,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
       if (!hasProperty(entry, 'position')) {
         findings.push({
           id: `schema-breadcrumb-position-${position}-${node.path}`,
+          code: `schema-breadcrumb-position`,
           level: 'error',
           title: `Breadcrumb ${position + 1} has no position`,
           detail: 'Positions order the trail; without them the crumbs are unordered and the trail is dropped.',
@@ -457,6 +473,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
       if (!last && !hasProperty(entry, 'item')) {
         findings.push({
           id: `schema-breadcrumb-item-${position}-${node.path}`,
+          code: `schema-breadcrumb-item`,
           level: 'warning',
           title: `Breadcrumb ${position + 1} has no item URL`,
           detail: 'Every crumb but the last should link somewhere, otherwise the trail is not navigable.',
@@ -472,6 +489,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
     if (questions.length === 0 && hasProperty(node.value, 'mainEntity')) {
       findings.push({
         id: `schema-faq-empty-${node.path}`,
+        code: `schema-faq-empty`,
         level: 'error',
         title: 'FAQPage has no questions',
         detail: 'An empty mainEntity produces no expandable rows.',
@@ -485,6 +503,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
       if (!hasProperty(entry, 'name')) {
         findings.push({
           id: `schema-faq-name-${position}-${node.path}`,
+          code: `schema-faq-name`,
           level: 'error',
           title: `Question ${position + 1} has no name`,
           detail: 'The question text is what the row displays.',
@@ -495,6 +514,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
       if (answer === undefined || !hasProperty(answer, 'text')) {
         findings.push({
           id: `schema-faq-answer-${position}-${node.path}`,
+          code: `schema-faq-answer`,
           level: 'error',
           title: `Question ${position + 1} has no acceptedAnswer text`,
           detail: 'A question without an answer is dropped, and one bad entry can cost the whole set.',
@@ -510,6 +530,7 @@ function auditTypeShape(node: SchemaNode): SeoFinding[] {
     if (action !== undefined && !hasProperty(action, 'target')) {
       findings.push({
         id: `schema-searchaction-target-${node.path}`,
+        code: `schema-searchaction-target`,
         level: 'warning',
         title: 'potentialAction has no target',
         detail: 'A SearchAction without a target URL template cannot produce a sitelinks search box.',
@@ -925,8 +946,10 @@ function comparable(first: string, second: string): boolean {
   const normalize = (value: string): string => value.toLowerCase().replace(/\s+/g, ' ').trim();
   const a = normalize(first);
   const b = normalize(second);
-  // A site suffix on the page title is a convention, not a contradiction.
-  return a === b || b.startsWith(a) || a.startsWith(b);
+  // Either one containing the other is agreement, not contradiction. A site
+  // name is as often a prefix as a suffix — "Acme Tools Trade Counter" beside
+  // "Trade counter · Acme Tools" is one page described twice, not two pages.
+  return a === b || b.includes(a) || a.includes(b);
 }
 
 function sameUrl(first: string, second: string): boolean {

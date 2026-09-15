@@ -36,6 +36,9 @@ const seo = {
 			'@type': 'Product',
 			// Contradicts the page it sits on.
 			name: 'A product this page does not describe',
+			// Present so that the missing `sku` reported by the real storefront
+			// groups cleanly under /shop/ instead of being diluted by this fixture.
+			sku: 'SKU-BROKEN',
 			// No price, no aggregateRating, no review: nothing left to show.
 			offers: { '@type': 'Offer', priceCurrency: 'USD' },
 		},

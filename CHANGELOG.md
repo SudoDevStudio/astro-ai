@@ -60,6 +60,19 @@ write entries for someone deciding whether to upgrade.
   subject, nothing quotable as a fact, no headings, no canonical URL to cite,
   and missing provenance — asked for only where it applies, since a catalogue
   page needs a publisher and not a byline.
+- New **Site** tab: audits every route the project serves and reports causes
+  rather than pages. A crawler gives you one row per URL, which is a list of
+  symptoms — fourteen pages missing `og:image` look like fourteen problems, and
+  are almost never fourteen problems. Findings are grouped by a stable cause
+  key, the affected routes are shown as the evidence for it, and a cause whose
+  routes all sit under one directory is named as a template rather than a
+  coincidence. **Fix everywhere** hands the agent the whole class along with an
+  instruction to find the shared source and change it once.
+- Routes are enumerated from `src/pages` by the dev server rather than
+  discovered by crawling, so the audit knows about a page before anything links
+  to it. Dynamic routes are listed but never requested, because guessing a
+  `[slug]` would audit a 404, and the walk runs one request at a time behind a
+  ceiling so it cannot tie up the dev server it is running inside.
 - The **Tags** tab lists every title, meta, link, and `lang` value the page
   rendered, including the duplicates crawlers ignore.
 - Docked chat layout: the **Dock** button moves every chat window into a column on
@@ -97,10 +110,18 @@ write entries for someone deciding whether to upgrade.
   within them the window name, status text, and provider label give way before
   any control does. Below 400px the controls drop their words and keep their
   icons rather than being pushed out.
+- The dock can hold the bottom edge instead of the right. A column is the one
+  thing a page being worked on at phone width cannot spare, so **Bottom** in the
+  dock header moves it to a strip across the bottom and the page keeps its full
+  measure, giving up height instead. Each edge remembers its own size, and the
+  `dockSide` option sets which one a project opens with — a starting point that
+  yields to whoever moves it first, like `chatLayout`.
 - The docked width is published as `--astro-ai-dock-width` on the root element.
   A root margin reflows normal flow but cannot move an app's own
   `position: fixed` elements, so an app that has them can offset them with this
-  variable. Below 720px the dock becomes a bottom sheet and takes no column.
+  variable, or `--astro-ai-dock-height` when it is along the bottom; only the
+  edge actually held is published. Below 720px the dock is a bottom sheet
+  whatever the setting, and takes no inset.
 
 ## [1.1.0] - 2026-09-13
 

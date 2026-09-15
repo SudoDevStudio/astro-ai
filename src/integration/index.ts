@@ -1,3 +1,5 @@
+import { readdir } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { AstroIntegration } from 'astro';
@@ -17,6 +19,7 @@ import {
   normalizeContentAttributes,
   type ContentSourceDefinition,
 } from '../shared/content-sources.js';
+import { pageRoutesFromFiles } from '../shared/page-routes.js';
 import {
   normalizeSeoPreview,
   type SeoPreviewOption,
@@ -38,7 +41,10 @@ import {
   type InspectSelectionMessage,
   type InsertionZonesRequestMessage,
   type InsertionZonesResolvedMessage,
+  type SiteRoutesRequestMessage,
+  type SiteRoutesResolvedMessage,
   type ChatLayoutPreference,
+  type DockSidePreference,
   type ServerReadyMessage,
   type VisualEditorErrorMessage,
 } from '../shared/protocol.js';
@@ -77,6 +83,11 @@ export type BuildWithAIOptions = {
    * to for the rest of the session, so this is a starting point, not a lock.
    */
   chatLayout?: ChatLayoutPreference;
+  /**
+   * Edge a docked chat opens against. `'bottom'` leaves a narrow page its full
+   * width, which is what working on a mobile layout needs.
+   */
+  dockSide?: DockSidePreference;
   /** Share preview settings, or `false` to hide it. */
   seo?: SeoPreviewOption;
 };
@@ -106,7 +117,7 @@ export {
   SEO_NETWORK_IDS,
 } from '../shared/seo-preview.js';
 export type { SeoNetworkId, SeoPreviewOption } from '../shared/seo-preview.js';
-export type { ChatLayoutPreference, SeoPreviewConfig } from '../shared/protocol.js';
+export type { ChatLayoutPreference, DockSidePreference, SeoPreviewConfig } from '../shared/protocol.js';
 
 export function agentSelectionReferences(
   message: Pick<AgentInstructionMessage, 'attachments'>,
@@ -185,6 +196,8 @@ export default function buildWithAI(
   let seoPreview: ServerReadyMessage['seo'];
   const chatLayout: ChatLayoutPreference | undefined =
     options.chatLayout === 'fixed' || options.chatLayout === 'floating' ? options.chatLayout : undefined;
+  const dockSide: DockSidePreference | undefined =
+    options.dockSide === 'right' || options.dockSide === 'bottom' ? options.dockSide : undefined;
 
   return {
     name: TOOLBAR_APP_ID,
@@ -215,6 +228,11 @@ export default function buildWithAI(
         if (options.chatLayout !== undefined && chatLayout === undefined) {
           logger.error(
             `[astro-ai] \`chatLayout\` must be 'floating' or 'fixed'; received ${JSON.stringify(options.chatLayout)}. Using 'floating'.`,
+          );
+        }
+        if (options.dockSide !== undefined && dockSide === undefined) {
+          logger.error(
+            `[astro-ai] \`dockSide\` must be 'right' or 'bottom'; received ${JSON.stringify(options.dockSide)}. Using 'right'.`,
           );
         }
 
@@ -337,6 +355,7 @@ export default function buildWithAI(
             history: activeEngine.transactions.state(),
             ...(contentAttributes.length === 0 ? {} : { contentAttributes }),
             ...(chatLayout === undefined ? {} : { chatLayout }),
+            ...(dockSide === undefined ? {} : { dockSide }),
             ...(seoPreview === undefined ? {} : { seo: seoPreview }),
             agent: await activeAgent.status(),
           });
@@ -373,6 +392,25 @@ export default function buildWithAI(
             requestId: message.requestId,
             zones: activeResolver.findInsertionPointsForRoute(message.route),
           });
+        });
+
+        toolbar.on<SiteRoutesRequestMessage>(CLIENT_EVENTS.siteRoutes, async (message) => {
+          try {
+            const root = activeResolver.projectRoot;
+            const files = await listPageFiles(join(root, 'src', 'pages'), root);
+            toolbar.send<SiteRoutesResolvedMessage>(SERVER_EVENTS.siteRoutes, {
+              requestId: message.requestId,
+              routes: pageRoutesFromFiles(files),
+            });
+          } catch (error) {
+            // A project with no `src/pages` is perfectly valid; the editor then
+            // audits whatever it can reach by following links instead.
+            toolbar.send<SiteRoutesResolvedMessage>(SERVER_EVENTS.siteRoutes, {
+              requestId: message.requestId,
+              routes: [],
+              message: error instanceof Error ? error.message : 'Could not read src/pages.',
+            });
+          }
         });
 
         toolbar.on<ExecuteVisualCommandMessage>(CLIENT_EVENTS.execute, async (message) => {
@@ -552,4 +590,21 @@ function sendError(
     message,
     fallbackEligible,
   });
+}
+
+/**
+ * Every file under `src/pages`, project-relative, for route enumeration.
+ *
+ * Walks rather than globs so the integration keeps no dependency for it, and
+ * returns paths in the shape `pageRoutesFromFiles` expects.
+ */
+async function listPageFiles(directory: string, root: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const absolute = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await listPageFiles(absolute, root));
+    else if (entry.isFile()) files.push(relative(root, absolute).split(sep).join('/'));
+  }
+  return files;
 }

@@ -1,0 +1,132 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import { guides, type Guide } from '../../data/catalog';
+import { articleSchema, breadcrumbSchema, faqSchema, organizationSchema } from '../../schema';
+
+/**
+ * A dynamic route, on purpose.
+ *
+ * The site audit enumerates routes from `src/pages` before requesting anything,
+ * so it can see this file but not the addresses it serves — those only exist
+ * once `getStaticPaths` has run. It lists the route as skipped rather than
+ * guessing a slug and auditing a 404.
+ */
+export function getStaticPaths() {
+  return guides.map((guide) => ({ params: { slug: guide.slug }, props: { guide } }));
+}
+
+type Props = { guide: Guide };
+
+const { guide } = Astro.props as Props;
+const origin = Astro.site?.href ?? Astro.url.origin;
+
+const schema = [
+  articleSchema(origin, guide),
+  breadcrumbSchema(origin, [
+    { name: 'Home', path: '/' },
+    { name: 'Guides', path: '/guides/' },
+    { name: guide.title },
+  ]),
+  faqSchema(guide.faq),
+  organizationSchema(origin),
+];
+---
+
+<Layout
+	title={guide.title}
+	lede={guide.summary}
+	seo={{
+		description: guide.summary,
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		ogType: 'article',
+		schema,
+	}}
+>
+	<p class="byline">
+		By {guide.author} · published {guide.published} · updated {guide.updated}
+	</p>
+
+	<article class="body">
+		{guide.body.map((paragraph) => <p>{paragraph}</p>)}
+	</article>
+
+	<section class="panel" aria-label="Frequently asked questions">
+		<h2>Questions</h2>
+		{
+			guide.faq.map(({ question, answer }) => (
+				<div class="qa">
+					<h3>{question}</h3>
+					<p>{answer}</p>
+				</div>
+			))
+		}
+	</section>
+
+	<Callout title="The page an answer engine likes" tone="accent">
+		Open <strong>AEO</strong>. This page has everything a citation needs — a
+		named author, a published date, a publisher, a canonical URL, headings, and
+		question and answer pairs — which is why it reports nothing, unlike almost
+		every other page here.
+	</Callout>
+
+	<Callout title="Why the site audit skips this route">
+		It is a <code>[slug]</code> route. The audit reads
+		<code>src/pages</code> before requesting anything, so it knows this file
+		exists but not which addresses it serves: those come from
+		<code>getStaticPaths</code> at build time. Guessing a slug would audit a
+		404, so it lists the route as skipped and leaves it to you.
+	</Callout>
+</Layout>
+
+<style>
+	.byline {
+		color: #aeb6c5;
+		font-size: 0.85rem;
+		margin: 0;
+	}
+
+	.body {
+		display: grid;
+		gap: 0.9rem;
+	}
+
+	.body p {
+		margin: 0;
+	}
+
+	.panel {
+		border: 1px solid #262b35;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.75rem;
+		padding: 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0;
+	}
+
+	h3 {
+		font-size: 0.95rem;
+		margin: 0;
+	}
+
+	.qa {
+		border-top: 1px solid #262b35;
+		display: grid;
+		gap: 0.3rem;
+		padding-top: 0.75rem;
+	}
+
+	.qa p {
+		color: #aeb6c5;
+		margin: 0;
+	}
+
+	code {
+		color: #c4b5fd;
+	}
+</style>

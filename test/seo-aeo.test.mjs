@@ -226,3 +226,54 @@ test('the agent brief states what was extracted and what was missing', () => {
   assert.match(brief, /12 in the HTML as served/);
   assert.match(brief, /author=\(none\)/);
 });
+
+test('something that was written is answered with its byline', () => {
+  const { extraction, metadata } = page({
+    schema: [{
+      '@context': 'https://schema.org',
+      '@type': 'BlogPosting',
+      headline: 'Specifying a torque wrench',
+      author: { '@type': 'Person', name: 'A. Category Manager' },
+      datePublished: '2026-03-04',
+      publisher: { '@type': 'Organization', name: 'Acme Tools' },
+    }],
+  });
+  const answer = composeAnswer(extraction, metadata);
+
+  assert.equal(answer.grounding, 'strong');
+  assert.match(answer.sentence, /written by A\. Category Manager/);
+  assert.match(answer.sentence, /published on 2026-03-04/);
+
+  // A product is not attributed to an author, so it gets no byline clause.
+  const product = page({ schema: [{ ...PRODUCT, author: { '@type': 'Person', name: 'Nobody' } }] });
+  assert.equal(/written by/.test(composeAnswer(product.extraction, product.metadata).sentence), false);
+});
+
+test('lifts the facts a job posting and a shopfront state', () => {
+  const job = page({
+    schema: [{
+      '@context': 'https://schema.org',
+      '@type': 'JobPosting',
+      title: 'Field Application Engineer',
+      description: 'Support customers on site.',
+      datePosted: '2026-08-30',
+      hiringOrganization: { '@type': 'Organization', name: 'Acme Tools' },
+      jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', addressLocality: 'Sheffield' } },
+      baseSalary: { '@type': 'MonetaryAmount', currency: 'USD' },
+    }],
+  });
+  assert.equal(job.extraction.entity.name, 'Field Application Engineer');
+
+  const store = page({
+    schema: [{
+      '@context': 'https://schema.org',
+      '@type': 'Store',
+      name: 'Acme Tools Trade Counter',
+      telephone: '+1 555 0100',
+      address: { '@type': 'PostalAddress', streetAddress: '1 Forge Lane', addressLocality: 'Sheffield' },
+    }],
+  });
+  const facts = new Map(store.extraction.facts.map(({ label, value }) => [label, value]));
+  assert.equal(facts.get('Location'), '1 Forge Lane, Sheffield');
+  assert.equal(facts.get('Telephone'), '+1 555 0100');
+});

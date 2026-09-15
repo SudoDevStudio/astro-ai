@@ -1,0 +1,96 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import { guides } from '../../data/catalog';
+import { breadcrumbSchema, itemListSchema, organizationSchema } from '../../schema';
+
+const origin = Astro.site?.href ?? Astro.url.origin;
+
+const schema = [
+  itemListSchema(
+    origin,
+    guides.map(({ title, slug }) => ({ name: title, path: `/guides/${slug}/` })),
+  ),
+  breadcrumbSchema(origin, [{ name: 'Home', path: '/' }, { name: 'Guides' }]),
+  organizationSchema(origin),
+];
+---
+
+<Layout
+	title="Buying guides"
+	lede="Articles with a byline, a date, and a publisher — the provenance a citation needs."
+	seo={{
+		description:
+			'How to specify a torque wrench and when to retire a safety harness, written by the people who answer the phone about them.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		schema,
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		Open a guide and look at <strong>AEO</strong>. These are the only pages on
+		this site that satisfy every answer-engine check, because they are the only
+		ones that say who wrote them and when.
+	</Callout>
+
+	<section class="list" aria-label="Guides">
+		{
+			guides.map((guide) => (
+				<article class="card">
+					<h2><a href={`/guides/${guide.slug}/`}>{guide.title}</a></h2>
+					<p>{guide.summary}</p>
+					<p class="byline">{guide.author} · {guide.published}</p>
+				</article>
+			))
+		}
+	</section>
+
+	<Callout title="Dynamic routes in the site audit">
+		These pages are served by <code>src/pages/guides/[slug].astro</code>. The
+		audit lists that route as skipped rather than guessing a slug, so the guides
+		are checked one at a time from their own pages.
+	</Callout>
+</Layout>
+
+<style>
+	.list {
+		display: grid;
+		gap: 0.75rem;
+	}
+
+	.card {
+		border: 1px solid #262b35;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.35rem;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0;
+	}
+
+	h2 a {
+		color: #f8fafc;
+		text-decoration: none;
+	}
+
+	h2 a:hover {
+		color: #c4b5fd;
+	}
+
+	p {
+		color: #aeb6c5;
+		margin: 0;
+	}
+
+	.byline {
+		color: #7f8998;
+		font-size: 0.8rem;
+	}
+
+	code {
+		color: #c4b5fd;
+	}
+</style>

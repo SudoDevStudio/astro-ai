@@ -1543,10 +1543,17 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .layout-button[aria-pressed='true'] { background: #0e4a5a; border-color: #22d3ee; color: #cffafe; }
     .layout-button[aria-pressed='true']:hover:not(:disabled) { background: #14607a; border-color: #67e8f9; }
 
-    .ai-chat-windows[data-layout='fixed'] { background: #0b0e14; border-left: 1px solid #343c49; bottom: 0; box-shadow: -18px 0 50px rgb(0 0 0 / .4); box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr); position: fixed; right: 0; top: 0; width: var(--dock-width, 420px); z-index: ${EDITOR_LAYERS.chatWindowTop}; }
-    .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] { width: 44px; }
+    .ai-chat-windows[data-layout='fixed'] { background: #0b0e14; bottom: 0; box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr); position: fixed; right: 0; z-index: ${EDITOR_LAYERS.chatWindowTop}; }
+    /* A column down the right, which is what a desktop layout has room for. */
+    .ai-chat-windows[data-layout='fixed'][data-side='right'] { border-left: 1px solid #343c49; box-shadow: -18px 0 50px rgb(0 0 0 / .4); top: 0; width: var(--dock-width, 420px); }
+    /* A strip across the bottom, which is the only shape that leaves a narrow
+       page its full width — the case for working on a mobile layout. */
+    .ai-chat-windows[data-layout='fixed'][data-side='bottom'] { border-top: 1px solid #343c49; box-shadow: 0 -18px 50px rgb(0 0 0 / .4); height: var(--dock-height, 380px); left: 0; top: auto; width: auto; }
+    .ai-chat-windows[data-layout='fixed'][data-side='right'][data-collapsed='true'] { width: 44px; }
+    .ai-chat-windows[data-layout='fixed'][data-side='bottom'][data-collapsed='true'] { height: 44px; }
     .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-tabs, .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-body { display: none; }
-    .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-header { border-bottom: 0; flex-direction: column; height: 100%; padding: 8px 0; }
+    .ai-chat-windows[data-layout='fixed'][data-side='right'][data-collapsed='true'] .dock-header { border-bottom: 0; flex-direction: column; height: 100%; padding: 8px 0; }
+    .ai-chat-windows[data-layout='fixed'][data-side='bottom'][data-collapsed='true'] .dock-header { border-bottom: 0; }
     .dock-header { align-items: center; background: #10141a; border-bottom: 1px solid #292f3a; display: flex; gap: 6px; justify-content: space-between; padding: 6px 8px; }
     .dock-tabs { display: flex; flex: 1 1 auto; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
     .dock-tabs::-webkit-scrollbar { display: none; }
@@ -1559,6 +1566,8 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .dock-tab-close:hover:not(:disabled) { background: #3f2230; color: #fda4af; }
     .dock-actions { align-items: center; display: flex; flex: 0 0 auto; gap: 4px; }
     .dock-grip { bottom: 0; cursor: ew-resize; left: -5px; position: absolute; top: 0; width: 10px; }
+    .ai-chat-windows[data-layout='fixed'][data-side='bottom'] .dock-grip { cursor: ns-resize; height: 10px; left: 0; right: 0; top: -5px; width: auto; }
+    .dock-header .tool-button { font-size: 10px; padding: 4px 8px; }
     .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-grip { display: none; }
     .dock-body { display: contents; }
     .ai-chat-windows[data-layout='fixed'] .dock-body { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; }
@@ -1680,9 +1689,12 @@ export function createChatDrawerStyle(): HTMLStyleElement {
       .shortcut-hint { display: none; }
       /* Too narrow to give the page a column of its own, so the dock becomes a
          bottom sheet and the page keeps its full width behind it. */
-      .ai-chat-windows[data-layout='fixed'] { border-left: 0; border-top: 1px solid #343c49; box-shadow: 0 -14px 35px rgb(0 0 0 / .32); height: min(76vh, 680px); top: auto; width: 100vw; }
+      .ai-chat-windows[data-layout='fixed'] { border-left: 0; border-top: 1px solid #343c49; box-shadow: 0 -14px 35px rgb(0 0 0 / .32); height: min(76vh, 680px); left: 0; top: auto; width: 100vw; }
       .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] { height: 46px; width: 100vw; }
       .ai-chat-windows[data-layout='fixed'][data-collapsed='true'] .dock-header { flex-direction: row; height: auto; padding: 6px 8px; }
+      /* No room for a column at this width, so the side control has nothing to
+         offer and the dock is a bottom sheet either way. */
+      .dock-side-button { display: none; }
       .ai-chat-drawer[data-layout='fixed'] { height: 100%; width: 100% !important; }
       .dock-grip { cursor: ns-resize; height: 10px; left: 0; right: 0; top: -5px; width: auto; }
     }
@@ -1878,7 +1890,7 @@ function button(label: string, onClick?: () => void): HTMLButtonElement {
 }
 
 /** A labelled toolbar control: a glyph, a word, and a sentence in the tooltip. */
-function toolButton(
+export function toolButton(
   icon: string,
   label: string,
   title: string,
@@ -1893,7 +1905,7 @@ function toolButton(
   return node;
 }
 
-function setToolButton(node: HTMLElement, icon: string, label: string, title: string): void {
+export function setToolButton(node: HTMLElement, icon: string, label: string, title: string): void {
   const iconNode = node.querySelector('.tool-icon');
   const labelNode = node.querySelector('.tool-label');
   if (iconNode !== null) iconNode.textContent = icon;

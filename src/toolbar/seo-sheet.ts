@@ -25,6 +25,15 @@ import {
   type RichResult,
   type StructuredData,
 } from './seo-schema.js';
+import type { PageRoute } from '../shared/page-routes.js';
+import {
+  affectedRoutes,
+  countCauses,
+  describeCauseForAgent,
+  scanSite,
+  type AuditCause,
+  type SiteAudit,
+} from './seo-site.js';
 import {
   auditAnswerReadiness,
   composeAnswer,
@@ -38,9 +47,15 @@ import {
 export type SeoSheetCallbacks = {
   /** Hands a finding to the agent, the same path 'Fix with AI' uses elsewhere. */
   onFix(context: AgentExternalContext): void;
+  /**
+   * Asks the server which routes the project serves. Absent when the toolbar is
+   * talking to a server too old to answer, in which case the site audit is
+   * offered but reports that it has nothing to walk.
+   */
+  onRequestRoutes?(): Promise<{ routes: PageRoute[]; message?: string }>;
 };
 
-type PaneId = 'previews' | 'issues' | 'schema' | 'aeo' | 'tags';
+type PaneId = 'previews' | 'issues' | 'schema' | 'aeo' | 'site' | 'tags';
 
 /**
  * A full-screen reading of the page's head: what each network will render, what
@@ -71,6 +86,9 @@ export class SeoPreviewSheet {
   #answer: AeoAnswer | undefined;
   /** Guards the served-HTML fetch against a refresh that overtakes it. */
   #serverProbe = 0;
+  #site: SiteAudit | undefined;
+  #scan: { aborted: boolean } | undefined;
+  #scanNote = '';
 
   constructor(callbacks: SeoSheetCallbacks) {
     this.#callbacks = callbacks;
@@ -166,6 +184,8 @@ export class SeoPreviewSheet {
     this.element.hidden = true;
     document.removeEventListener('keydown', this.#onKeyDown, true);
     this.#cancelProbe();
+    // A walk of the whole site must not outlive the sheet that asked for it.
+    if (this.#scan !== undefined) this.#scan.aborted = true;
   }
 
   toggle(): void {
@@ -277,12 +297,14 @@ export class SeoPreviewSheet {
     this.#tabs.get('issues')?.replaceChildren(paneLabel('issues', this.#findings.length));
     this.#tabs.get('schema')?.replaceChildren(paneLabel('schema', this.#structured.nodes.length));
     this.#tabs.get('aeo')?.replaceChildren(paneLabel('aeo', this.#extraction?.facts.length ?? 0));
+    this.#tabs.get('site')?.replaceChildren(paneLabel('site', this.#site?.causes.length ?? 0));
     this.#tabs.get('tags')?.replaceChildren(paneLabel('tags', metadata.tags.length));
 
     this.#renderPreviews(metadata);
     this.#renderIssues(metadata);
     this.#renderSchema();
     this.#renderAeo();
+    this.#renderSite();
     this.#renderTags(metadata);
   }
 
@@ -592,6 +614,169 @@ export class SeoPreviewSheet {
       : `${aeoFindings.length} thing${aeoFindings.length === 1 ? '' : 's'} limiting how quotable this page is, listed on Issues.`;
 
     pane.replaceChildren(intro, extract, likely, summary);
+  }
+
+  /**
+   * Walks every route the project serves and audits each one.
+   *
+   * Deliberately started by hand rather than on open: it is dozens of requests
+   * against the dev server the user is also looking at, and it should happen
+   * when they ask for it.
+   */
+  async #startSiteAudit(): Promise<void> {
+    if (this.#scan !== undefined || this.#callbacks.onRequestRoutes === undefined) return;
+    const signal = { aborted: false };
+    this.#scan = signal;
+    this.#site = undefined;
+    this.#scanNote = 'Asking the server which routes exist…';
+    this.#renderSite();
+
+    try {
+      const { routes, message } = await this.#callbacks.onRequestRoutes();
+      if (signal.aborted) return;
+      if (routes.length === 0) {
+        this.#scanNote = message ?? 'The project serves no routes this editor can enumerate.';
+        return;
+      }
+      const audit = await scanSite(routes, {
+        fetchHtml: async (route) => {
+          const response = await fetch(new URL(route, window.location.origin).href, {
+            headers: { accept: 'text/html' },
+            credentials: 'same-origin',
+          });
+          if (!response.ok) throw new Error(`The server answered ${response.status}.`);
+          return response.text();
+        },
+        parse: (html) => new DOMParser().parseFromString(html, 'text/html'),
+        resolve: (route) => new URL(route, window.location.origin).href,
+        signal,
+        onProgress: (done, total, route) => {
+          this.#scanNote = done === total
+            ? 'Grouping findings by cause…'
+            : `Reading ${route} — ${done + 1} of ${total}`;
+          this.#renderSite();
+        },
+      });
+      if (signal.aborted) return;
+      this.#site = audit;
+      this.#scanNote = '';
+    } catch (error) {
+      this.#scanNote = error instanceof Error ? error.message : 'The site audit could not run.';
+    } finally {
+      if (this.#scan === signal) this.#scan = undefined;
+      if (!signal.aborted) this.#render();
+    }
+  }
+
+  #renderSite(): void {
+    const pane = this.#panes.get('site');
+    if (pane === undefined) return;
+    const scanning = this.#scan !== undefined;
+
+    const bar = element('div', 'site-bar');
+    const summary = element('p', 'site-summary');
+    const start = textButton(scanning ? 'Auditing…' : this.#site === undefined ? 'Audit the whole site' : 'Audit again', () => {
+      void this.#startSiteAudit();
+    });
+    start.className = 'site-start';
+    start.disabled = scanning || this.#callbacks.onRequestRoutes === undefined;
+
+    if (this.#callbacks.onRequestRoutes === undefined) {
+      summary.textContent = 'This editor cannot ask the server for the route list, so the site audit is unavailable.';
+    } else if (scanning) {
+      summary.textContent = this.#scanNote;
+    } else if (this.#site === undefined) {
+      summary.textContent = this.#scanNote !== ''
+        ? this.#scanNote
+        : 'A crawler reports one row per page. Fourteen pages missing og:image look like fourteen problems; they are usually one layout. This reads every route and groups what it finds by the cause behind it.';
+    } else {
+      const counts = countCauses(this.#site.causes);
+      const scanned = this.#site.routes.length;
+      summary.textContent = this.#site.causes.length === 0
+        ? `${scanned} routes audited. Nothing to report on any of them.`
+        : `${scanned} routes audited · ${this.#site.causes.length} cause${this.#site.causes.length === 1 ? '' : 's'} behind ${affectedRoutes(this.#site.causes)} affected route${affectedRoutes(this.#site.causes) === 1 ? '' : 's'} · ${counts.error} error${counts.error === 1 ? '' : 's'}, ${counts.warning} warning${counts.warning === 1 ? '' : 's'}, ${counts.info} note${counts.info === 1 ? '' : 's'}.`;
+    }
+    bar.append(summary, start);
+
+    const children: HTMLElement[] = [bar];
+    if (this.#site !== undefined) {
+      const list = element('ul', 'site-causes');
+      for (const cause of this.#site.causes) list.append(this.#renderCause(cause, this.#site.routes.length));
+      if (this.#site.causes.length > 0) children.push(list);
+
+      if (this.#site.clean.length > 0) {
+        children.push(note(`${this.#site.clean.length} route${this.#site.clean.length === 1 ? '' : 's'} reported nothing: ${this.#site.clean.slice(0, 8).join(', ')}${this.#site.clean.length > 8 ? '…' : ''}`));
+      }
+      if (this.#site.skipped.length > 0) {
+        children.push(note(`${this.#site.skipped.length} dynamic route${this.#site.skipped.length === 1 ? '' : 's'} not requested, because their addresses only exist once getStaticPaths has run: ${this.#site.skipped.map(({ file }) => file).slice(0, 4).join(', ')}. Open one and use the Issues tab for it.`));
+      }
+      const failed = this.#site.routes.filter(({ error }) => error !== undefined);
+      if (failed.length > 0) {
+        children.push(note(`${failed.length} route${failed.length === 1 ? '' : 's'} could not be read: ${failed.map(({ route, error }) => `${route} (${error})`).join('; ')}`));
+      }
+    }
+    pane.replaceChildren(...children);
+  }
+
+  #renderCause(cause: AuditCause, scanned: number): HTMLElement {
+    const item = element('li', 'site-cause');
+    item.dataset.level = cause.level;
+
+    const head = element('div', 'site-cause-head');
+    const level = element('span', 'seo-finding-level');
+    level.textContent = cause.level;
+    const title = element('strong', 'seo-finding-title');
+    title.textContent = cause.title;
+    const reach = element('span', 'site-reach');
+    reach.textContent = `${cause.routes.length} of ${scanned} routes`;
+    if (cause.varies === true) {
+      // The title carries a measurement from one route, so say it is an example.
+      const varies = element('span', 'site-varies');
+      varies.textContent = 'value differs by route';
+      varies.title = 'Each route reported this with its own number; the title shows one of them.';
+      head.append(varies);
+    }
+    const fix = textButton('✦ Fix everywhere', () => {
+      this.#callbacks.onFix({
+        kind: 'seo',
+        title: `${cause.title} · ${cause.routes.length} routes`,
+        message: describeCauseForAgent(cause, scanned),
+      });
+      this.close();
+    });
+    fix.className = 'seo-fix';
+    head.append(level, title, reach, fix);
+
+    const detail = element('p', 'seo-finding-detail');
+    detail.textContent = cause.detail;
+    item.append(head, detail);
+
+    if (cause.sharedPrefix !== undefined) {
+      const shared = element('p', 'site-shared');
+      shared.textContent = `Every affected route is under ${cause.sharedPrefix} — one template, not ${cause.routes.length} pages.`;
+      item.append(shared);
+    }
+
+    const routes = document.createElement('details');
+    routes.className = 'site-routes';
+    const summary = document.createElement('summary');
+    summary.textContent = `Show the ${cause.routes.length} route${cause.routes.length === 1 ? '' : 's'}`;
+    const list = element('div', 'site-route-list');
+    for (const route of cause.routes) {
+      const chip = element('a', 'site-route');
+      chip.textContent = route;
+      chip.href = route;
+      list.append(chip);
+    }
+    routes.append(summary, list);
+    item.append(routes);
+
+    if (cause.tag !== undefined) {
+      const tag = element('code', 'seo-finding-tag');
+      tag.textContent = cause.tag;
+      item.append(tag);
+    }
+    return item;
   }
 
   #renderTags(metadata: PageMetadata): void {
@@ -925,13 +1110,14 @@ function line(className: string, text: string): HTMLElement {
   return node;
 }
 
-const PANES = ['previews', 'issues', 'schema', 'aeo', 'tags'] as const;
+const PANES = ['previews', 'issues', 'schema', 'aeo', 'site', 'tags'] as const;
 
 const PANE_LABELS: Record<PaneId, string> = {
   previews: 'Previews',
   issues: 'Issues',
   schema: 'Schema',
   aeo: 'AEO',
+  site: 'Site',
   tags: 'Tags',
 };
 
@@ -1249,6 +1435,12 @@ function sectionTitle(text: string, className = 'aeo-title'): HTMLElement {
   return title;
 }
 
+function note(text: string): HTMLElement {
+  const node = element('p', 'site-note');
+  node.textContent = text;
+  return node;
+}
+
 function emptyNote(text: string): HTMLElement {
   const note = element('p', 'aeo-empty');
   note.textContent = text;
@@ -1424,6 +1616,26 @@ export function createSeoSheetStyle(): HTMLStyleElement {
     .gg-faq-row[open] summary::after { content: '⌃'; }
     .gg-faq-answer { color: #4d5156; font-size: 13px; margin: 0 0 9px; }
 
+    .site-bar { align-items: center; background: #12161d; border: 1px solid #272e39; border-radius: 10px; display: flex; gap: 16px; justify-content: space-between; margin-bottom: 16px; padding: 12px 14px; }
+    .site-summary { color: #aeb7c5; font-size: 12px; margin: 0; max-width: 70ch; }
+    .site-start { background: #0e4a5a; border-color: #22d3ee; color: #cffafe; flex: 0 0 auto; font-weight: 700; white-space: nowrap; }
+    .site-start:hover:not(:disabled) { background: #14607a; border-color: #67e8f9; }
+    .site-causes { display: grid; gap: 10px; list-style: none; margin: 0 0 14px; padding: 0; }
+    .site-cause { background: #12161d; border: 1px solid #272e39; border-left-width: 3px; border-radius: 9px; display: grid; gap: 7px; padding: 12px 14px; }
+    .site-cause[data-level='error'] { border-left-color: #ef4444; }
+    .site-cause[data-level='warning'] { border-left-color: #f59e0b; }
+    .site-cause[data-level='info'] { border-left-color: #38bdf8; }
+    .site-cause[data-level='error'] .seo-finding-level { background: #35191d; color: #fda4af; }
+    .site-cause[data-level='warning'] .seo-finding-level { background: #33270f; color: #fcd34d; }
+    .site-cause[data-level='info'] .seo-finding-level { background: #0c2b3a; color: #7dd3fc; }
+    .site-cause-head { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
+    .site-reach { background: #1d2330; border: 1px solid #343d4a; border-radius: 999px; color: #d9dce3; font: 700 10px/1.5 ui-sans-serif, system-ui, sans-serif; padding: 2px 9px; }
+    .site-shared { background: #101b22; border: 1px solid #1e4a58; border-radius: 6px; color: #a5f3fc; font-size: 11px; margin: 0; padding: 7px 10px; }
+    .site-routes summary { color: #8c94a3; cursor: pointer; font-size: 11px; }
+    .site-route-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .site-route { background: #0b0e14; border: 1px solid #2a313c; border-radius: 5px; color: #a5b4fc; font: 10px/1.6 ui-monospace, SFMono-Regular, monospace; padding: 2px 7px; text-decoration: none; }
+    .site-route:hover { border-color: #6366f1; color: #c7d2fe; }
+    .site-note { color: #7f8998; font-size: 11px; margin: 0 0 8px; }
     .schema-summary { color: #aeb7c5; font-size: 12px; margin: 0 0 14px; }
     .schema-block { background: #12161d; border: 1px solid #272e39; border-left-width: 3px; border-radius: 9px; display: grid; gap: 9px; margin-bottom: 10px; padding: 12px 14px; }
     .schema-block[data-state='parsed'] { border-left-color: #22c55e; }

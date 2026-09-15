@@ -55,7 +55,34 @@ for (const dockWidth of [420, 360, 320]) {
   const seoBtn = drawer.element.querySelector('.seo-button').getBoundingClientRect();
   const ok = dockBtn.right <= panel.right + 0.5 && seoBtn.right <= panel.right + 0.5 && dockBtn.width > 0;
   if (!ok) failures += 1;
-  lines.push(`dock ${dockWidth}px  ${ok ? 'ok' : `CLIPPED(dock.right=${dockBtn.right.toFixed(0)} panel=${panel.right.toFixed(0)})`}`);
+  lines.push(`dock right ${dockWidth}px  ${ok ? 'ok' : `CLIPPED(dock.right=${dockBtn.right.toFixed(0)} panel=${panel.right.toFixed(0)})`}`);
+}
+
+// The bottom dock is a different shape entirely: full width, fixed height,
+// and it must actually sit on the bottom edge rather than keeping the column.
+manager.setDockSide('bottom');
+for (const dockHeight of [380, 240]) {
+  manager.setDockHeight(dockHeight);
+  const panel = manager.element.getBoundingClientRect();
+  const spansWidth = Math.abs(panel.width - window.innerWidth) < 1.5;
+  const onBottom = Math.abs(panel.bottom - window.innerHeight) < 1.5;
+  const rightHeight = Math.abs(panel.height - dockHeight) < 1.5;
+  const controls = ['.layout-button', '.seo-button', '.dock-side-button']
+    .map((selector) => drawer.element.querySelector(selector) ?? manager.element.querySelector(selector))
+    .map((node) => node.getBoundingClientRect())
+    .every((rect) => rect.width > 0 && rect.right <= panel.right + 0.5 && rect.bottom <= panel.bottom + 0.5);
+  const ok = spansWidth && onBottom && rightHeight && controls;
+  if (!ok) failures += 1;
+  lines.push(`dock bottom ${dockHeight}px  ${ok ? 'ok' : `BAD(w=${panel.width.toFixed(0)}/${window.innerWidth} bottom=${panel.bottom.toFixed(0)}/${window.innerHeight} h=${panel.height.toFixed(0)} controls=${controls})`}`);
+}
+
+// Back to the right, to prove the shape is not one-way.
+manager.setDockSide('right');
+{
+  const panel = manager.element.getBoundingClientRect();
+  const ok = Math.abs(panel.right - window.innerWidth) < 1.5 && Math.abs(panel.height - window.innerHeight) < 1.5;
+  if (!ok) failures += 1;
+  lines.push(`dock right again  ${ok ? 'ok' : `BAD(h=${panel.height.toFixed(0)}/${window.innerHeight})`}`);
 }
 
 document.getElementById('out').textContent = lines.join('\n');

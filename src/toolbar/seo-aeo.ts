@@ -115,6 +115,8 @@ export function extractForAnswerEngines(
     addFact('Starts', subject.startDate, 'schema');
     addFact('Location', subject.location ?? subject.address, 'schema');
     addFact('Duration', subject.duration, 'schema');
+    addFact('Telephone', subject.telephone, 'schema');
+    addFact('Salary', readSalary(subject), 'schema');
   }
   addFact('Summary', metadata.og.description ?? metadata.description, 'meta');
 
@@ -220,6 +222,14 @@ export function composeAnswer(extraction: AeoExtraction, metadata: PageMetadata)
   if (starts !== undefined) clauses.push(`starts ${starts}`);
   if (location !== undefined) clauses.push(`is at ${location}`);
   if (duration !== undefined) clauses.push(`takes ${duration}`);
+
+  // Something that was written is answered with its byline, which is also the
+  // part an assistant needs in order to attribute the claim to anyone.
+  if (extraction.entity !== undefined && AUTHORED_TYPES.has(extraction.entity.type)) {
+    const { author, published } = extraction.provenance;
+    if (author !== undefined) clauses.push(`was written by ${author}`);
+    if (published !== undefined) clauses.push(`was published on ${published}`);
+  }
 
   const summary = facts.get('Summary');
   if (clauses.length > 0) {
@@ -358,15 +368,15 @@ export function auditAnswerReadiness(
   // author is noise rather than advice.
   const authored = extraction.entity === undefined || AUTHORED_TYPES.has(extraction.entity.type);
   const missing = [
-    authored && author === undefined ? 'an author' : undefined,
-    authored && published === undefined ? 'a published date' : undefined,
-    publisher === undefined ? 'a publisher' : undefined,
+    authored && author === undefined ? 'author' : undefined,
+    authored && published === undefined ? 'published date' : undefined,
+    publisher === undefined ? 'publisher' : undefined,
   ].filter((part): part is string => part !== undefined);
   if (missing.length > 0) {
     add({
       id: 'aeo-weak-provenance',
       level: missing.length >= 3 ? 'warning' : 'info',
-      title: `No ${joinClauses(missing)}`,
+      title: `No ${missing.join(' or ')}`,
       detail: 'Assistants prefer sources they can attribute and date. Provenance is what separates a page worth citing from one worth paraphrasing without credit.',
       networks: AEO,
       tag: 'Article.author',
@@ -467,6 +477,12 @@ function trimSentence(text: string, limit = 180): string {
 
 function comparableText(first: string, second: string): boolean {
   return normalize(first).toLowerCase() === normalize(second).toLowerCase();
+}
+
+/** A salary range stated plainly enough for an assistant to repeat. */
+function readSalary(subject: EntityView): string | undefined {
+  const salary = subject.fields.find(({ label }) => label === 'baseSalary');
+  return salary?.value;
 }
 
 function spaced(value: string): string {

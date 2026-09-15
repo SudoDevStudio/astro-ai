@@ -118,7 +118,14 @@ export type NetworkCard = {
 export type SeoFindingLevel = 'error' | 'warning' | 'info';
 
 export type SeoFinding = {
+  /** Unique to this occurrence: two bad breadcrumbs are two ids. */
   id: string;
+  /**
+   * Stable across occurrences, naming the *kind* of problem rather than the
+   * place it happened. A site audit groups by this, which is how fourteen
+   * symptoms become one cause. Defaults to `id` where the two are the same.
+   */
+  code?: string;
   level: SeoFindingLevel;
   title: string;
   detail: string;

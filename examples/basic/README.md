@@ -30,7 +30,51 @@ path where the editor re-establishes itself against a swapped page.
 | `/components/` | Registered components and their typed props. |
 | `/catalog/` | One template in a loop where every card resolves its own entry. |
 | `/island/` | A React island: editable props, a repeated `.map()`, entries per row. |
+| `/shop/` | A storefront: `ItemList`, `BreadcrumbList` and a sitelinks `SearchAction`. |
+| `/shop/<product>/` | Three products through one template: `Product`, `Offer`, `AggregateRating`, `FAQPage`, `VideoObject`. |
+| `/guides/` | Buying guides as `BlogPosting`, with the byline and date a citation needs. |
+| `/store/` | The trade counter as a `LocalBusiness`, with address, hours and coordinates. |
+| `/careers/field-engineer/` | A `JobPosting`, the type with the longest required list. |
 | `/seo/` | Share preview fixtures, one page per failure mode. |
+
+### The storefront
+
+`/shop/` exists so every ecommerce schema type has somewhere real to live, and
+so the **Site** tab has something real to group. Between them the pages publish
+`Product`, `Offer`, `AggregateRating`, `Brand`, `BreadcrumbList`, `FAQPage`,
+`VideoObject`, `ItemList`, `WebSite` with a `SearchAction`, `Organization`,
+`Store`, `BlogPosting` with a `Person` author, and `JobPosting`.
+
+Two things are worth opening it for.
+
+**`/shop/torque-wrench/` publishes five entities at once.** The Google card
+gains a trail, stars, a price and a stock line; **AEO** reports six liftable
+facts and composes a strongly grounded answer:
+
+> Torque Wrench 200Nm costs USD 189.00, is rated 4.6 out of 5 from 128 reviews
+> and is listed as in stock.
+
+**One template is deliberately missing one thing.**
+`src/schema.ts` builds every product's JSON-LD and never emits `sku`. Audit the
+site and that arrives as a single row:
+
+```
+WARNING  Product has no sku
+         3 of 17 routes  →  all under /shop/
+         /shop/cable-spool/ /shop/safety-harness/ /shop/torque-wrench/
+```
+
+Three pages, one cause, one edit — which is the whole argument for the Site tab.
+**Fix everywhere** hands the agent the class and tells it to find the shared
+source rather than patch three files.
+
+`/guides/[slug].astro` is a dynamic route on purpose: the audit reads
+`src/pages` before requesting anything, so it knows the file exists but not
+which addresses it serves. It lists the route as skipped rather than guessing a
+slug and auditing a 404.
+
+The guides are the only pages here that satisfy every answer-engine check,
+because they are the only ones that say who wrote them and when.
 
 ### React island
 

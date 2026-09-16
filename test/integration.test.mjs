@@ -386,3 +386,77 @@ test('reports a bad editor default and keeps the dev server usable', async () =>
   assert.match(badLayout.errors.join('\n'), /must be 'floating' or 'fixed'/);
   assert.equal('chatLayout' in badLayout.ready, false);
 });
+
+test('answers with the routes the project serves', async () => {
+  const listeners = new Map();
+  const sent = [];
+  const integration = buildWithAI();
+
+  integration.hooks['astro:config:setup']({
+    config: { root: new URL('../examples/basic/', import.meta.url) },
+    command: 'dev',
+    addDevToolbarApp() {},
+    updateConfig(config) { return config; },
+    logger: { error() {}, warn() {}, debug() {} },
+  });
+  integration.hooks['astro:server:setup']({
+    toolbar: {
+      on(event, callback) { listeners.set(event, callback); },
+      send(event, payload) { sent.push([event, payload]); },
+    },
+    logger: { warn() {}, debug() {}, error() {} },
+  });
+
+  await listeners.get(CLIENT_EVENTS.siteRoutes)({ requestId: 'routes-1' });
+
+  const reply = sent.find(([event]) => event === SERVER_EVENTS.siteRoutes)?.[1];
+  assert.equal(reply.requestId, 'routes-1');
+  const routes = reply.routes.map(({ route }) => route);
+  // The example's own pages, read off disk rather than guessed at.
+  assert.equal(routes.includes('/'), true);
+  assert.equal(routes.includes('/seo/clean/'), true);
+  assert.equal(routes.includes('/seo/rich/'), true);
+  assert.equal(routes.includes('/island/'), true);
+  assert.equal(reply.routes.every(({ file }) => file.startsWith('src/pages/')), true);
+});
+
+test('a project with no src/pages says so instead of failing', async () => {
+  const listeners = new Map();
+  const sent = [];
+  const integration = buildWithAI();
+
+  integration.hooks['astro:config:setup']({
+    config: { root: new URL('../test/fixtures/', import.meta.url) },
+    command: 'dev',
+    addDevToolbarApp() {},
+    updateConfig(config) { return config; },
+    logger: { error() {}, warn() {}, debug() {} },
+  });
+  integration.hooks['astro:server:setup']({
+    toolbar: {
+      on(event, callback) { listeners.set(event, callback); },
+      send(event, payload) { sent.push([event, payload]); },
+    },
+    logger: { warn() {}, debug() {}, error() {} },
+  });
+
+  await listeners.get(CLIENT_EVENTS.siteRoutes)({ requestId: 'routes-2' });
+
+  const reply = sent.find(([event]) => event === SERVER_EVENTS.siteRoutes)?.[1];
+  assert.deepEqual(reply.routes, []);
+  assert.match(reply.message, /ENOENT|no such file/i);
+});
+
+test('carries the configured dock side to the toolbar', async () => {
+  const configured = await readyPayload({ chatLayout: 'fixed', dockSide: 'bottom' });
+  assert.deepEqual(configured.errors, []);
+  assert.equal(configured.ready.dockSide, 'bottom');
+
+  // Unconfigured sends nothing, so the toolbar keeps its own default.
+  const bare = await readyPayload({ chatLayout: 'fixed' });
+  assert.equal('dockSide' in bare.ready, false);
+
+  const bad = await readyPayload({ dockSide: 'left' });
+  assert.match(bad.errors.join('\n'), /must be 'right' or 'bottom'/);
+  assert.equal('dockSide' in bad.ready, false);
+});

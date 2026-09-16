@@ -56,6 +56,12 @@ codex login
 - Preview the current route as a shared link on X, Facebook, LinkedIn,
   Instagram, Discord, Slack, WhatsApp, and Google, with an audit of what will
   be wrong and **Fix with AI** on each finding.
+- Read the page's JSON-LD as rendered entities, see the rich result it produces,
+  and be told what each missing property costs.
+- See what an answer engine can take from the page — its subject, quotable
+  facts, Q&A pairs, provenance, and how much text survives without JavaScript.
+- Audit every route at once and fix a whole class of findings in one agent run,
+  grouped by the cause behind them rather than listed per page.
 - Float the chat windows over the page or dock them to a side column with tabs.
 
 ## Share preview
@@ -74,6 +80,48 @@ relative `og:image` no crawler can fetch, an image that loads at 64px despite
 declaring 1200×630, an `og:url` that disagrees with the canonical link. Each
 finding names the networks it affects, and **Fix with AI** sends it to the agent
 with the current tag values.
+
+**Schema** draws the page's JSON-LD as the things it describes — a Product with
+its price and stars, an Article with its byline and date, a breadcrumb trail as a
+trail — rather than as braces to read. A type with no shape of its own falls back
+to labelled fields instead of being guessed at, and the raw JSON stays one click
+away. It reads the page's JSON-LD. Structured data is the half of SEO meta
+tags cannot express — it is what turns a blue link into a result with
+breadcrumbs, stars, a price, or expandable questions — and the half that fails
+silently, since a missing `offers.price` costs the price and says nothing. The
+Google card renders what the schema actually produces, and the findings say what
+each gap costs: an unparseable block, a `Product` with no price or rating, a
+`BreadcrumbList` crumb with no name, a `FAQPage` question with no answer, a
+headline past the length Google reads, or a schema that describes a different
+page than the one it sits on.
+
+**AEO** is the other half. Search shows your page; an answer engine reads it,
+states what it says, and cites you if it can. Those are different jobs, and a
+page can be excellent at the first and useless at the second. The tab shows what
+an engine has to work with: the subject it can name, the facts it can lift
+verbatim (marked by whether they came from structured data or from a meta tag),
+the question and answer pairs it can quote, the provenance that makes a citation
+possible, and how much of the text exists *before* JavaScript runs — the page is
+fetched again as served, because most answer engines are not browsers.
+
+Alongside it is the answer the page affords, assembled from those extracted
+values by a template. It is not a model's output and says so: every clause is
+something the page states, so a thin sentence there means a thin page.
+
+**Site** audits every route the project serves, and reports *causes* rather than
+pages. A crawler run against a finished site gives you one row per URL: fourteen
+pages missing `og:image` look like fourteen problems. They are almost never
+fourteen problems — they are one layout. Running inside the dev server changes
+what can be said about that, because the routes are known before anything is
+requested and the pages come from a project the agent can edit. So findings are
+grouped by the cause behind them, the affected routes are shown as evidence, a
+cause confined to one directory is named as a template, and **Fix everywhere**
+hands the agent the whole class with an instruction to find the shared source
+rather than paste the same tag into fourteen files.
+
+Dynamic routes are listed but never requested — guessing a `[slug]` would audit
+a 404 — and the walk stops at a request ceiling so a large site cannot tie up
+the dev server you are working in.
 
 **Tags** lists every title, meta, link, and `lang` value the page rendered,
 including duplicates that crawlers ignore.
@@ -108,23 +156,31 @@ The page reflows into the remaining width rather than sitting behind the panel.
 **Float** undocks them again. Switching moves no state, so a run in flight keeps
 running, and the choice is remembered for the session.
 
-Set the layout the editor opens in with `chatLayout: 'fixed'`. It applies until
-someone switches layouts themselves, after which their choice wins for the rest
-of the session.
+The dock holds the right edge by default. **Bottom** in its header moves it to a
+strip across the bottom instead, which leaves the page its full width — the
+layout you want while working on a mobile view, where a column is the one thing
+a narrow page cannot spare. Each edge keeps its own size.
+
+Set what the editor opens with using `chatLayout: 'fixed'` and
+`dockSide: 'bottom'`. Both apply until someone moves the dock themselves, after
+which their choice wins for the rest of the session.
 
 A root margin reflows normal flow but cannot move your app's own
 `position: fixed` elements, which are laid out against the viewport. The dock
-publishes its width as `--astro-ai-dock-width` on the root element so you can
-offset them yourself:
+publishes the edge it holds on the root element so you can offset them yourself:
 
 ```css
 .my-fixed-header {
   right: var(--astro-ai-dock-width, 0px);
 }
+
+.my-fixed-footer {
+  bottom: var(--astro-ai-dock-height, 0px);
+}
 ```
 
-The variable is only set while the dock holds a column. Below 720px the dock
-becomes a bottom sheet and takes no column at all.
+Only the variable for the edge actually held is set. Below 720px the dock is a
+bottom sheet whatever the setting, and takes no inset at all.
 
 ## Options
 
@@ -150,6 +206,7 @@ buildWithAI({
   skills: ['AGENTS.md'],
   maxRecoveryFiles: 20,
   chatLayout: 'fixed', // or 'floating'; the user can switch either way
+  dockSide: 'bottom', // or 'right'; 'bottom' leaves a narrow page its width
   seo: { networks: ['x', 'linkedin', 'google', 'slack'] },
   visualComponents: [
     {

@@ -25,6 +25,56 @@ write entries for someone deciding whether to upgrade.
   link, a title past the length Google reads. Each finding names the networks
   it affects, and **Fix with AI** hands it to the agent with the current tag
   values, through the same path the Vite error overlay already uses.
+- The preview's **Schema** tab reads the page's JSON-LD — every
+  `<script type="application/ld+json">`, including arrays and `@graph` — and the
+  Google card renders what that schema actually produces: a breadcrumb trail in
+  place of the URL, stars and a review count, a price and a stock line, and
+  expandable questions. Structured data is the only thing that changes a search
+  result this much, and the only part of it a meta tag cannot express.
+- Structured data is checked against what each type needs for a rich result, so
+  a finding says what a gap costs rather than citing a rule: a `Product` with no
+  `offers.price` shows no price, a `BreadcrumbList` crumb with no `name` drops
+  the trail, one `FAQPage` question without an answer can cost the whole set. It
+  also catches what a validator run on the JSON alone cannot — a schema that is
+  internally valid and still describes a different title, image, or URL than the
+  page it sits on. Unparseable blocks are reported rather than silently skipped,
+  and an unrecognised type is left alone rather than guessed at.
+- The **Schema** tab draws each entity as the thing it describes rather than as
+  JSON: a Product with its image, price, stars and stock line; an Article with
+  its byline and date; a breadcrumb trail as a trail; an FAQ as expandable rows;
+  an Organization with its logo and profile links. Missing values are marked on
+  the card itself — a Product with no price says so where the price would be. A
+  type with no shape of its own falls back to labelled fields instead of being
+  guessed at, and the raw JSON stays one click away.
+- New **AEO** tab: what an answer engine can take from the page. It names the
+  subject, lists the facts that can be lifted verbatim — marked by whether they
+  came from structured data or from a meta tag — collects the question and
+  answer pairs from FAQ schema and from headings phrased as questions, and
+  reports the provenance a citation needs. It also fetches the page as served
+  and compares it to the rendered DOM, because most answer engines are not
+  browsers: text that only exists after hydration is invisible to them.
+- The AEO tab shows the answer the page affords, assembled from those extracted
+  values by a template. It is not a model's output and says so on the card:
+  every clause is something the page states, so a thin sentence means a thin
+  page rather than a cautious assistant.
+- Answer-readiness findings join the same Issues list: `nosnippet` forbidding
+  any quote at all, text that only appears after JavaScript runs, no named
+  subject, nothing quotable as a fact, no headings, no canonical URL to cite,
+  and missing provenance — asked for only where it applies, since a catalogue
+  page needs a publisher and not a byline.
+- New **Site** tab: audits every route the project serves and reports causes
+  rather than pages. A crawler gives you one row per URL, which is a list of
+  symptoms — fourteen pages missing `og:image` look like fourteen problems, and
+  are almost never fourteen problems. Findings are grouped by a stable cause
+  key, the affected routes are shown as the evidence for it, and a cause whose
+  routes all sit under one directory is named as a template rather than a
+  coincidence. **Fix everywhere** hands the agent the whole class along with an
+  instruction to find the shared source and change it once.
+- Routes are enumerated from `src/pages` by the dev server rather than
+  discovered by crawling, so the audit knows about a page before anything links
+  to it. Dynamic routes are listed but never requested, because guessing a
+  `[slug]` would audit a 404, and the walk runs one request at a time behind a
+  ceiling so it cannot tie up the dev server it is running inside.
 - The **Tags** tab lists every title, meta, link, and `lang` value the page
   rendered, including the duplicates crawlers ignore.
 - Docked chat layout: the **Dock** button moves every chat window into a column on
@@ -62,10 +112,18 @@ write entries for someone deciding whether to upgrade.
   within them the window name, status text, and provider label give way before
   any control does. Below 400px the controls drop their words and keep their
   icons rather than being pushed out.
+- The dock can hold the bottom edge instead of the right. A column is the one
+  thing a page being worked on at phone width cannot spare, so **Bottom** in the
+  dock header moves it to a strip across the bottom and the page keeps its full
+  measure, giving up height instead. Each edge remembers its own size, and the
+  `dockSide` option sets which one a project opens with — a starting point that
+  yields to whoever moves it first, like `chatLayout`.
 - The docked width is published as `--astro-ai-dock-width` on the root element.
   A root margin reflows normal flow but cannot move an app's own
   `position: fixed` elements, so an app that has them can offset them with this
-  variable. Below 720px the dock becomes a bottom sheet and takes no column.
+  variable, or `--astro-ai-dock-height` when it is along the bottom; only the
+  edge actually held is published. Below 720px the dock is a bottom sheet
+  whatever the setting, and takes no inset.
 
 ## [1.1.0] - 2026-09-13
 

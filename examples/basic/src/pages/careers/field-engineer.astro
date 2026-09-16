@@ -1,0 +1,97 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Callout from '../../components/Callout.astro';
+import { breadcrumbSchema, jobPostingSchema, organizationSchema } from '../../schema';
+
+const origin = Astro.site?.href ?? Astro.url.origin;
+
+const schema = [
+  jobPostingSchema(origin),
+  breadcrumbSchema(origin, [
+    { name: 'Home', path: '/' },
+    { name: 'Careers' },
+  ]),
+  organizationSchema(origin),
+];
+---
+
+<Layout
+	title="Field Application Engineer"
+	lede="A JobPosting, which is the one type that buys its way into a search experience of its own."
+	seo={{
+		description:
+			'Support customers specifying drives, cable and fall protection on site. Sheffield, full time, $68,000 to $84,000.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		schema,
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		<code>JobPosting</code> has the longest required list of any type here:
+		title, description, <code>datePosted</code>,
+		<code>hiringOrganization</code> and <code>jobLocation</code> are all
+		mandatory. Delete any one in <code>src/schema.ts</code> and the preview
+		says the posting drops out of job search entirely, rather than appearing
+		with a gap.
+	</Callout>
+
+	<section class="panel" aria-label="Role">
+		<h2>The role</h2>
+		<p>
+			Support customers specifying drives, cable and fall protection on site.
+			Half the week is spent at customer premises and half writing the
+			specifications that follow.
+		</p>
+		<dl class="facts">
+			<div><dt>Location</dt><dd>Sheffield</dd></div>
+			<div><dt>Type</dt><dd>Full time</dd></div>
+			<div><dt>Salary</dt><dd>$68,000 – $84,000</dd></div>
+			<div><dt>Closes</dt><dd>30 November 2026</dd></div>
+		</dl>
+	</section>
+
+	<Callout title="A posting that expires">
+		<code>validThrough</code> is what stops a filled role from being served for
+		years. It is optional, which is why so many job listings outlive the job.
+	</Callout>
+</Layout>
+
+<style>
+	.panel {
+		border: 1px solid #262b35;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.75rem;
+		padding: 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0;
+	}
+
+	p {
+		margin: 0;
+	}
+
+	.facts {
+		display: grid;
+		gap: 0.5rem;
+		grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+		margin: 0;
+	}
+
+	.facts dt {
+		color: #7f8998;
+		font-size: 0.75rem;
+		text-transform: uppercase;
+	}
+
+	.facts dd {
+		margin: 0.1rem 0 0;
+	}
+
+	code {
+		color: #c4b5fd;
+	}
+</style>

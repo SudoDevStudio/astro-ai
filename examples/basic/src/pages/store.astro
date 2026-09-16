@@ -1,0 +1,121 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+import { SITE_NAME } from '../data/catalog';
+import { breadcrumbSchema, localBusinessSchema, organizationSchema } from '../schema';
+
+const origin = Astro.site?.href ?? Astro.url.origin;
+
+const schema = [
+  localBusinessSchema(origin),
+  breadcrumbSchema(origin, [{ name: 'Home', path: '/' }, { name: 'Trade counter' }]),
+  organizationSchema(origin),
+];
+
+const hours = [
+  { days: 'Monday to Friday', open: '07:30', close: '17:00' },
+  { days: 'Saturday', open: '08:00', close: '12:00' },
+  { days: 'Sunday', open: 'Closed', close: '' },
+];
+---
+
+<!--
+	The title names the business, because the schema does. Calling the page
+	"Trade counter" while the Store node is "Acme Tools Trade Counter" is the
+	disagreement the share preview reports — and it reported this one, which is
+	how it came to be fixed.
+-->
+<Layout
+	title={`${SITE_NAME} Trade Counter`}
+	lede="A physical place, which is a different entity from the company that runs it."
+	seo={{
+		description:
+			'Collect online orders at the Sheffield trade counter. Open 07:30 to 17:00 on weekdays and Saturday mornings.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+		schema,
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		The <strong>Schema</strong> tab draws this as a business, with the address
+		flattened out of its <code>PostalAddress</code> and the phone number beside
+		it. <code>Store</code> inherits <code>LocalBusiness</code>, so it is checked
+		against the same rules without being listed as an unknown type.
+	</Callout>
+
+	<section class="details" aria-label="Trade counter details">
+		<div>
+			<h2>Address</h2>
+			<address>1 Forge Lane<br />Sheffield SY S1 2AB</address>
+			<p class="phone">+1 555 0100</p>
+		</div>
+		<div>
+			<h2>Opening hours</h2>
+			<dl class="hours">
+				{
+					hours.map(({ days, open, close }) => (
+						<div class="row">
+							<dt>{days}</dt>
+							<dd>{close === '' ? open : `${open} – ${close}`}</dd>
+						</div>
+					))
+				}
+			</dl>
+		</div>
+	</section>
+
+	<Callout title="Two entities, one page">
+		The company and the counter are not the same thing. The
+		<code>Organization</code> has a logo and profile links; the
+		<code>Store</code> has an address, hours and coordinates. Collapsing them
+		into one node is the usual mistake, and it costs the map placement.
+	</Callout>
+</Layout>
+
+<style>
+	.details {
+		display: grid;
+		gap: 1.25rem;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	}
+
+	h2 {
+		font-size: 0.95rem;
+		margin: 0 0 0.5rem;
+	}
+
+	address {
+		font-style: normal;
+		line-height: 1.6;
+	}
+
+	.phone {
+		color: #86efac;
+		font-family: ui-monospace, SFMono-Regular, monospace;
+		margin: 0.5rem 0 0;
+	}
+
+	.hours {
+		display: grid;
+		gap: 0.3rem;
+		margin: 0;
+	}
+
+	.row {
+		display: flex;
+		gap: 0.75rem;
+		justify-content: space-between;
+	}
+
+	.row dt {
+		color: #aeb6c5;
+	}
+
+	.row dd {
+		margin: 0;
+	}
+
+	code {
+		color: #c4b5fd;
+	}
+</style>

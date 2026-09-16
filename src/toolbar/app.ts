@@ -11,6 +11,8 @@ import {
   type OperationCompletedMessage,
   type SelectionResolvedMessage,
   type ServerReadyMessage,
+  type SiteRoutesRequestMessage,
+  type SiteRoutesResolvedMessage,
   type VisualEditorErrorMessage,
 } from '../shared/protocol.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
@@ -18,6 +20,7 @@ import { createChatDrawerStyle } from './chat-drawer.js';
 import { ChatWindowManager } from './chat-windows.js';
 import { DiagnosticActionBridge } from './diagnostic-actions.js';
 import { SelectionOverlay } from './overlay.js';
+import type { PageRoute } from '../shared/page-routes.js';
 import { createSeoSheetStyle, SeoPreviewSheet } from './seo-sheet.js';
 
 const APP_OPEN_KEY = 'astro-ai:app-open';
@@ -27,6 +30,8 @@ export default defineToolbarApp({
     let disposed = false;
     let restoringOpenState = readSession(APP_OPEN_KEY) === 'true';
     const pendingInspectRequests = new Map<string, string>();
+    type RouteReply = { routes: PageRoute[]; message?: string };
+    const pendingRouteRequests = new Map<string, (reply: RouteReply) => void>();
     let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
     let seoSheet: SeoPreviewSheet;
@@ -131,7 +136,10 @@ export default defineToolbarApp({
       window.setTimeout(() => windows.openWithExternalContext(context), 0);
     };
     const diagnosticActions = new DiagnosticActionBridge({ onFix: openWithExternalContext });
-    seoSheet = new SeoPreviewSheet({ onFix: openWithExternalContext });
+    seoSheet = new SeoPreviewSheet({
+      onFix: openWithExternalContext,
+      onRequestRoutes: () => requestSiteRoutes(),
+    });
 
     const drawerStyle = createChatDrawerStyle();
     const seoStyle = createSeoSheetStyle();
@@ -170,10 +178,11 @@ export default defineToolbarApp({
       restoringOpenState = false;
     });
 
-    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes, chatLayout, seo }) => {
+    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes, chatLayout, dockSide, seo }) => {
       if (disposed || protocolVersion !== PROTOCOL_VERSION) return;
       overlay.setContentAttributes(contentAttributes ?? []);
       windows.setDefaultLayout(chatLayout);
+      windows.setDefaultDockSide(dockSide);
       windows.setSeoAvailable(seo !== false);
       seoSheet.configure(seo);
       if (seo === false) seoSheet.close();
@@ -188,6 +197,12 @@ export default defineToolbarApp({
       if (disposed || !pendingInspectRequests.delete(requestId)) return;
       overlay.setSelection(context);
       windows.broadcastNotice('Source-backed selection resolved locally.');
+    });
+    server.on<SiteRoutesResolvedMessage>(SERVER_EVENTS.siteRoutes, ({ requestId, routes, message }) => {
+      const pending = pendingRouteRequests.get(requestId);
+      if (pending === undefined) return;
+      pendingRouteRequests.delete(requestId);
+      pending({ routes, ...(message === undefined ? {} : { message }) });
     });
     server.on<InsertionZonesResolvedMessage>(SERVER_EVENTS.insertionZones, ({ requestId, zones }) => {
       if (disposed || requestId !== insertionZonesRequestId) return;
@@ -284,6 +299,28 @@ export default defineToolbarApp({
       server.send(CLIENT_EVENTS.execute, {
         requestId: createRequestId(),
         command,
+      });
+    }
+
+    /**
+     * Asks the server for the project's routes.
+     *
+     * Resolves with an empty list rather than rejecting when nothing answers:
+     * a server too old to know this message should leave the audit saying so,
+     * not leave the sheet waiting forever.
+     */
+    function requestSiteRoutes(): Promise<RouteReply> {
+      const requestId = createRequestId();
+      return new Promise<RouteReply>((resolve) => {
+        const timer = window.setTimeout(() => {
+          pendingRouteRequests.delete(requestId);
+          resolve({ routes: [], message: 'The dev server did not answer with a route list.' });
+        }, 5000);
+        pendingRouteRequests.set(requestId, (reply) => {
+          window.clearTimeout(timer);
+          resolve(reply);
+        });
+        server.send<SiteRoutesRequestMessage>(CLIENT_EVENTS.siteRoutes, { requestId });
       });
     }
 

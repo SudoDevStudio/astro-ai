@@ -9,16 +9,59 @@ const products = [
 	{ id: 'entry-c23f', sku: 'SKU-1002', name: 'Cable spool', blurb: 'Shielded, 100 m.' },
 	{ id: 'entry-d95b', sku: 'SKU-1003', name: 'Safety harness', blurb: 'Full body, size L.' },
 ];
+
+const description =
+	'One template rendered in a loop, where every card resolves its own CMS entry from the element you clicked while the source location stays put.';
+
+const origin = Astro.site ?? Astro.url.origin;
+const url = new URL('/catalog/', origin).href;
+
+// Passing `schema` replaces the auto blocks, so the page and organisation are
+// restated here with the same values the tags use. The list is built from the
+// same `products` the cards render, so every declared fact is visible on the page.
+const schema = [
+	{
+		'@context': 'https://schema.org',
+		'@type': 'CollectionPage',
+		name: 'Catalog · astro-ai example',
+		url,
+		description,
+		image: new URL('/og/card.png', origin).href,
+		mainEntity: {
+			'@type': 'ItemList',
+			name: 'Product cards',
+			numberOfItems: products.length,
+			itemListElement: products.map((product, index) => ({
+				'@type': 'ListItem',
+				position: index + 1,
+				item: {
+					'@type': 'Product',
+					name: product.name,
+					sku: product.sku,
+					description: product.blurb,
+				},
+			})),
+		},
+	},
+	{
+		'@context': 'https://schema.org',
+		'@type': 'Organization',
+		name: 'astro-ai example',
+		url: new URL('/', origin).href,
+		logo: new URL('/favicon.svg', origin).href,
+		sameAs: ['https://github.com/SudoDevStudio/astro-ai'],
+	},
+];
 ---
 
 <Layout
 	title="Catalog"
 	lede="One template, many entries. Each rendered card resolves its own entry."
 	seo={{
-		description:
-			'One template rendered in a loop, where every card resolves its own CMS entry from the element you clicked while the source location stays put.',
+		description,
 		image: '/og/card.png',
 		imageAlt: 'Abstract share card for the astro-ai example',
+		schema,
 	}}
 >
 	<Callout title="What to try" tone="accent">
@@ -37,6 +80,23 @@ const products = [
 				</article>
 			))
 		}
+	</section>
+
+	<section class="panel" aria-label="How the cards are built">
+		<h2>How the cards are built</h2>
+		<p>
+			All three cards come from one <code>products.map()</code> call, fed by a
+			local array that stands in for a CMS response. Each card carries a
+			<code>data-entry-id</code> for its record and a <code>data-sku</code> for
+			its catalog number, so the torque wrench, cable spool, and safety harness
+			each resolve to a different entry.
+		</p>
+		<p>
+			Changing the card markup, such as the heading or the SKU styling, is a
+			template edit and updates every card at once. Changing a product's name or
+			description is a content edit, and it belongs in that product's entry
+			rather than in the template.
+		</p>
 	</section>
 
 	<Callout title="Why this matters">
@@ -74,5 +134,17 @@ const products = [
 		color: #86efac;
 		font-family: ui-monospace, SFMono-Regular, monospace;
 		font-size: 0.8rem;
+	}
+
+	.panel {
+		border: 1px dashed #3f4552;
+		border-radius: 8px;
+		display: grid;
+		gap: 0.5rem;
+		padding: 1rem 1.25rem;
+	}
+
+	code {
+		color: #86efac;
 	}
 </style>

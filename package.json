@@ -52,13 +52,13 @@
     "check": "tsc --noEmit",
     "format:check": "prettier --check src/agent/cli-agent-fallback.ts",
     "test": "npm run test:unit",
-    "test:all": "npm run test:unit && npm run test:layout && npm run test:hmr && npm run test:production",
+    "test:all": "npm run test:unit && npm run test:browser && npm run test:hmr && npm run test:production",
     "test:unit": "npm run build && node --test test/*.test.mjs",
     "test:hmr": "node test/run-live-tests.mjs",
     "test:production": "node test/verify-production.mjs",
     "smoke:hmr": "node test/live-hmr-smoke.mjs",
     "prepare": "npm run build",
-    "test:layout": "npm run build && node test/layout-visibility.mjs"
+    "test:browser": "npm run build && node test/browser-checks.mjs"
   },
   "dependencies": {
     "@astrojs/compiler-rs": "^0.4.0",

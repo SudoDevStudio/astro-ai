@@ -18,6 +18,7 @@ export const CLIENT_EVENTS = {
   agentCancel: 'astro-ai:agent-cancel',
   sessionClose: 'astro-ai:session-close',
   insertionZones: 'astro-ai:insertion-zones',
+  siteRoutes: 'astro-ai:site-routes',
 } as const;
 
 /**
@@ -35,6 +36,7 @@ export const SERVER_EVENTS = {
   error: 'astro-ai:error',
   agentEvent: 'astro-ai:agent-event',
   insertionZones: 'astro-ai:insertion-zones-result',
+  siteRoutes: 'astro-ai:site-routes-result',
 } as const;
 
 export type ClientReadyMessage = {
@@ -58,6 +60,9 @@ export type SeoPreviewConfig = {
 
 export type ChatLayoutPreference = 'floating' | 'fixed';
 
+/** Which edge a docked chat holds. */
+export type DockSidePreference = 'right' | 'bottom';
+
 export type ServerReadyMessage = {
   protocolVersion: typeof PROTOCOL_VERSION;
   history: PatchHistoryState;
@@ -65,6 +70,8 @@ export type ServerReadyMessage = {
   contentAttributes?: string[];
   /** Layout the chat opens in before the user chooses one for the session. */
   chatLayout?: ChatLayoutPreference;
+  /** Edge a docked chat opens against, before the user moves it. */
+  dockSide?: DockSidePreference;
   /** `false` hides the share preview outright. */
   seo?: SeoPreviewConfig | false;
   agent: {
@@ -142,6 +149,16 @@ export type AgentSessionClosedMessage = {
 };
 
 export type InsertionZonesRequestMessage = { requestId: string; route: string };
+
+/** Asks for every route the project serves, so the editor can audit the site. */
+export type SiteRoutesRequestMessage = { requestId: string };
+
+export type SiteRoutesResolvedMessage = {
+  requestId: string;
+  routes: Array<{ route: string; file: string; dynamic: boolean }>;
+  /** Set when the page directory could not be read at all. */
+  message?: string;
+};
 export type InsertionZonesResolvedMessage = { requestId: string; zones: SourceInsertionZone[] };
 
 export type AgentOperationState =
@@ -195,6 +212,7 @@ export type ClientToServerMessages = {
   [CLIENT_EVENTS.agentCancel]: AgentCancelMessage;
   [CLIENT_EVENTS.sessionClose]: AgentSessionClosedMessage;
   [CLIENT_EVENTS.insertionZones]: InsertionZonesRequestMessage;
+  [CLIENT_EVENTS.siteRoutes]: SiteRoutesRequestMessage;
 };
 
 export type ServerToClientMessages = {
@@ -205,4 +223,5 @@ export type ServerToClientMessages = {
   [SERVER_EVENTS.error]: VisualEditorErrorMessage;
   [SERVER_EVENTS.agentEvent]: AgentOperationEvent;
   [SERVER_EVENTS.insertionZones]: InsertionZonesResolvedMessage;
+  [SERVER_EVENTS.siteRoutes]: SiteRoutesResolvedMessage;
 };

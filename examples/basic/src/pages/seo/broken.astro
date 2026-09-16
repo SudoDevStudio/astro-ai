@@ -24,6 +24,25 @@ const seo = {
 	ogType: false as const,
 	themeColor: false as const,
 	favicon: false,
+	// Emitted verbatim, so the first block really is invalid JSON: a trailing
+	// comma, which every editor tolerates and no crawler does. The second is
+	// valid JSON describing a Product that cannot produce a rich result, and it
+	// contradicts the page it sits on.
+	schema: [
+		// A trailing comma: every editor tolerates it, no crawler does.
+		'{ "@context": "https://schema.org", "@type": "Product", "name": "Unclosed", }',
+		{
+			'@context': 'https://schema.org',
+			'@type': 'Product',
+			// Contradicts the page it sits on.
+			name: 'A product this page does not describe',
+			// Present so that the missing `sku` reported by the real storefront
+			// groups cleanly under /shop/ instead of being diluted by this fixture.
+			sku: 'SKU-BROKEN',
+			// No price, no aggregateRating, no review: nothing left to show.
+			offers: { '@type': 'Offer', priceCurrency: 'USD' },
+		},
+	],
 };
 ---
 

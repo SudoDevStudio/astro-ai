@@ -1,15 +1,14 @@
 /**
- * Renders a real chat panel in headless Chrome and asserts that no control is
- * ever pushed outside it.
+ * Runs the checks that need a real browser.
  *
- * jsdom cannot catch this class of bug: it has no layout engine, so a row that
- * overflows its grid track measures the same as one that fits. The regression
- * this guards against — a grid item's default `min-width: auto` refusing to
- * shrink, so the row overflowed and `overflow: hidden` clipped the buttons at
- * the end of it — was invisible to every unit test in this suite.
+ * jsdom has no layout engine, so a row that overflows its grid track measures
+ * the same as one that fits — which is how a grid item's default
+ * `min-width: auto` clipped the toolbar's buttons past every unit test in this
+ * suite.
  *
- * Skips with a clear message where Chrome is not installed, so it never fails a
- * machine that simply has no browser.
+ * Each harness renders itself and reports through its `<title>`. Skips with a
+ * clear message where Chrome is not installed, so it never fails a machine that
+ * simply has no browser.
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -27,9 +26,13 @@ const CHROME_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ].filter((path) => path !== undefined);
 
+const HARNESSES = [
+  { file: 'test/fixtures/layout-harness.html', name: 'Layout visibility', pass: 'ALL-VISIBLE' },
+];
+
 const chrome = await firstExecutable(CHROME_CANDIDATES);
 if (chrome === undefined) {
-  console.log('Layout visibility check skipped: no Chrome or Chromium found. Set CHROME_PATH to run it.');
+  console.log('Browser checks skipped: no Chrome or Chromium found. Set CHROME_PATH to run them.');
   process.exit(0);
 }
 
@@ -54,22 +57,22 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const { port } = server.address();
 
 try {
-  const dom = await render(chrome, `http://127.0.0.1:${port}/test/fixtures/layout-harness.html`);
-  const verdict = dom.match(/<title>([^<]*)<\/title>/)?.[1];
-  const report = dom
-    .match(/<pre id="out">([\s\S]*?)<\/pre>/)?.[1]
-    ?.replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
+  for (const harness of HARNESSES) {
+    const dom = await render(chrome, `http://127.0.0.1:${port}/${harness.file}`);
+    const verdict = dom.match(/<title>([^<]*)<\/title>/)?.[1];
+    const report = dom
+      .match(/<pre id="out">([\s\S]*?)<\/pre>/)?.[1]
+      ?.replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
 
-  if (verdict !== 'ALL-VISIBLE') {
-    console.error(report ?? dom.slice(0, 2000));
-    throw new Error(
-      `Chat panel controls were clipped (${verdict ?? 'no verdict'}). A control must never be laid out past the panel edge, where overflow:hidden hides it.`,
-    );
+    if (verdict !== harness.pass) {
+      console.error(report ?? dom.slice(0, 2000));
+      throw new Error(`${harness.name} failed in a real browser (${verdict ?? 'no verdict'}).`);
+    }
+    console.log(report);
+    console.log(`${harness.name} passed.`);
   }
-  console.log(report);
-  console.log('Layout visibility passed: every control stays inside the panel at each width.');
 } finally {
   server.close();
 }

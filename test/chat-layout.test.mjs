@@ -4,10 +4,13 @@ import { JSDOM } from 'jsdom';
 
 import {
   ChatWindowManager,
+  DOCK_DEFAULT_HEIGHT,
   DOCK_DEFAULT_WIDTH,
+  DOCK_MIN_HEIGHT,
   DOCK_MAX_WIDTH,
   DOCK_MIN_WIDTH,
   DOCK_RAIL_WIDTH,
+  clampDockHeight,
   clampDockWidth,
 } from '../dist/toolbar/chat-windows.js';
 import { SeoPreviewSheet } from '../dist/toolbar/seo-sheet.js';
@@ -422,6 +425,340 @@ test('the share preview reads the live page and hands findings to the agent', ()
   } finally { cleanup(); }
 });
 
+test('the Google card renders what the page’s JSON-LD produces', () => {
+  const schema = JSON.stringify([
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Torque Wrench 200Nm',
+      offers: { '@type': 'Offer', price: '189.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' },
+      aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Tools', item: 'https://example.com/tools' },
+        { '@type': 'ListItem', position: 2, name: 'Torque Wrench' },
+      ],
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [{ '@type': 'Question', name: 'What torque range?', acceptedAnswer: { '@type': 'Answer', text: '20 to 200 Nm.' } }],
+    },
+  ]);
+  const cleanup = installDom('', `<title>Torque Wrench 200Nm</title><script type="application/ld+json">${schema}</script>`);
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.configure({ networks: ['google', 'facebook'] });
+    sheet.open();
+
+    const google = sheet.element.querySelector('.seo-card[data-network="google"]');
+    assert.match(google.querySelector('.gg-url').textContent, /Tools › Torque Wrench/);
+    assert.match(google.querySelector('.gg-stars').textContent, /★/);
+    assert.match(google.querySelector('.gg-score').textContent, /4\.6 \(128\)/);
+    assert.equal(google.querySelector('.gg-price').textContent, '$189.00');
+    assert.equal(google.querySelector('.gg-stock').textContent, 'In Stock');
+    assert.equal(google.querySelector('.gg-faq-row summary').textContent, 'What torque range?');
+
+    // Only Google renders rich results; the other cards are untouched.
+    assert.equal(sheet.element.querySelector('.seo-card[data-network="facebook"] .gg-stars'), null);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the Schema pane lists each block and its findings reach Issues', () => {
+  const cleanup = installDom('', `
+    <title>Broken schema</title>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article"}</script>
+    <script type="application/ld+json">{ not json }</script>
+  `);
+  try {
+    const fixes = [];
+    const sheet = new SeoPreviewSheet({ onFix(context) { fixes.push(context); } });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+
+    sheet.showPane('schema');
+    const blocks = [...sheet.element.querySelectorAll('.schema-block')];
+    assert.equal(blocks.length, 2);
+    assert.deepEqual(blocks.map((block) => block.dataset.state), ['parsed', 'invalid']);
+    assert.equal(blocks[0].querySelector('.schema-type').textContent, 'Article');
+    assert.notEqual(blocks[1].querySelector('.schema-error'), null);
+
+    // Schema problems are ordinary findings, sorted in with the meta-tag ones.
+    sheet.showPane('issues');
+    const titles = [...sheet.element.querySelectorAll('.seo-finding-title')].map((node) => node.textContent);
+    assert.equal(titles.some((title) => /not valid JSON/.test(title)), true);
+    assert.equal(titles.some((title) => /Article is missing headline/.test(title)), true);
+    assert.equal(titles.some((title) => /og:image/.test(title)), true, 'meta findings are still there');
+
+    // Fixing a schema finding hands the agent the JSON as well as the tags.
+    const row = [...sheet.element.querySelectorAll('.seo-finding')]
+      .find((item) => /not valid JSON/.test(item.querySelector('.seo-finding-title').textContent));
+    row.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(fixes[0].kind, 'seo');
+    assert.match(fixes[0].message, /Structured data: 2 blocks/);
+    assert.match(fixes[0].message, /block 2: unparseable/);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the Schema pane draws each entity, with the JSON behind a toggle', () => {
+  const schema = JSON.stringify([
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Torque Wrench 200Nm',
+      offers: { '@type': 'Offer', price: '189.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' },
+      aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+      brand: { '@type': 'Brand', name: 'Acme Tools' },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Tools', item: 'https://example.com/tools' },
+        { '@type': 'ListItem', position: 2, name: 'Torque Wrench' },
+      ],
+    },
+    { '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'Astro AI', operatingSystem: 'macOS' },
+  ]);
+  const cleanup = installDom('', `<title>Torque Wrench</title><script type="application/ld+json">${schema}</script>`);
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('schema');
+
+    const cards = [...sheet.element.querySelectorAll('.entity-card')];
+    assert.deepEqual(cards.map((card) => card.dataset.type), ['Product', 'BreadcrumbList', 'SoftwareApplication']);
+
+    // A Product is drawn as a product, not as braces.
+    const product = cards[0];
+    assert.equal(product.querySelector('.entity-name').textContent, 'Torque Wrench 200Nm');
+    assert.equal(product.querySelector('.entity-price').textContent, '$189.00');
+    assert.equal(product.querySelector('.entity-stock').textContent, 'In Stock');
+    assert.match(product.querySelector('.gg-stars').textContent, /★/);
+    assert.match(product.querySelector('.entity-meta').textContent, /Acme Tools/);
+
+    // A trail is drawn as a trail, and marks the crumb that links nowhere.
+    assert.deepEqual(
+      [...cards[1].querySelectorAll('.entity-crumb')].map((crumb) => crumb.textContent),
+      ['Tools', 'Torque Wrench'],
+    );
+
+    // A type with no card of its own still shows its fields rather than nothing.
+    assert.equal(cards[2].querySelector('.entity-name').textContent, 'Astro AI');
+    assert.match(cards[2].querySelector('.entity-fields').textContent, /operatingSystem/);
+
+    // The JSON is still reachable, just no longer the first thing shown.
+    assert.equal(sheet.element.querySelectorAll('.schema-source pre').length, 1);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('a Product with no price says so on the card', () => {
+  const schema = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: 'Torque Wrench',
+    offers: { '@type': 'Offer', priceCurrency: 'USD' },
+  });
+  const cleanup = installDom('', `<title>x</title><script type="application/ld+json">${schema}</script>`);
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('schema');
+
+    assert.equal(sheet.element.querySelector('.entity-missing').textContent, 'no price');
+    assert.equal(sheet.element.querySelector('.entity-price'), null);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the AEO pane shows what an answer engine can take, and the answer it affords', () => {
+  const schema = JSON.stringify([
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Torque Wrench 200Nm',
+      offers: { '@type': 'Offer', price: '189.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' },
+      aggregateRating: { '@type': 'AggregateRating', ratingValue: 4.6, reviewCount: 128 },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [{ '@type': 'Question', name: 'What torque range?', acceptedAnswer: { '@type': 'Answer', text: '20 to 200 Nm.' } }],
+    },
+  ]);
+  const cleanup = installDom(
+    '<main><h1>Torque Wrench</h1><p>Calibrated to 200 Nm.</p></main>',
+    `<title>Torque Wrench 200Nm</title><script type="application/ld+json">${schema}</script>`,
+  );
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('aeo');
+
+    assert.equal(sheet.element.querySelector('.aeo-subject-type').textContent, 'Product');
+    assert.equal(sheet.element.querySelector('.aeo-subject-name').textContent, 'Torque Wrench 200Nm');
+
+    const facts = sheet.element.querySelector('.aeo-facts').textContent;
+    assert.match(facts, /Price/);
+    assert.match(facts, /USD 189\.00/);
+    // A fact from schema is marked apart from one read out of a meta tag.
+    assert.match(sheet.element.querySelector('.aeo-source').textContent, /structured/);
+
+    assert.equal(sheet.element.querySelector('.aeo-question').textContent, 'What torque range?FAQ schema');
+
+    const answer = sheet.element.querySelector('.aeo-answer');
+    assert.equal(answer.dataset.grounding, 'strong');
+    assert.match(answer.querySelector('.aeo-sentence').textContent, /costs USD 189\.00/);
+    // The mock must never pass itself off as a model's output.
+    assert.match(sheet.element.querySelector('.aeo-caveat').textContent, /not generated by a model/);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('a page with nothing to quote says so rather than inventing an answer', () => {
+  const cleanup = installDom('<main><p>Hello.</p></main>', '<title>A page</title>');
+  try {
+    const fixes = [];
+    const sheet = new SeoPreviewSheet({ onFix(context) { fixes.push(context); } });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('aeo');
+
+    assert.equal(sheet.element.querySelector('.aeo-subject').dataset.state, 'missing');
+    assert.equal(sheet.element.querySelector('.aeo-answer').dataset.grounding, 'thin');
+    assert.match(sheet.element.querySelector('.aeo-findings-note').textContent, /limiting how quotable/);
+
+    // AEO findings are ordinary findings, and carry the extraction to the agent.
+    sheet.showPane('issues');
+    const row = [...sheet.element.querySelectorAll('.seo-finding')]
+      .find((item) => /no headings|readable text|quoted as a fact/i.test(item.querySelector('.seo-finding-title').textContent));
+    row.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+    assert.match(fixes[0].message, /What an answer engine can take/);
+
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('a meta-only fix is not padded with JSON the agent need not read', () => {
+  const cleanup = installDom('', `
+    <title>A page</title>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"Person","name":"A"}</script>
+  `);
+  try {
+    const fixes = [];
+    const sheet = new SeoPreviewSheet({ onFix(context) { fixes.push(context); } });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('issues');
+
+    const row = [...sheet.element.querySelectorAll('.seo-finding')]
+      .find((item) => /No og:image/.test(item.querySelector('.seo-finding-title').textContent));
+    row.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+
+    assert.match(fixes[0].message, /og:image/);
+    assert.equal(/Structured data:/.test(fixes[0].message), false);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
+test('the Site tab audits every route and reports causes, not pages', async () => {
+  const cleanup = installDom('<main><h1>Home</h1><p>Words.</p></main>', '<title>Home</title>');
+  try {
+    const fixes = [];
+    const pages = {
+      '/': '<!doctype html><html lang="en"><head><title>Home</title></head><body><main><p>Words here.</p></main></body></html>',
+      '/products/a/': '<!doctype html><html lang="en"><head><title>A</title></head><body><main><p>Words here.</p></main></body></html>',
+      '/products/b/': '<!doctype html><html lang="en"><head><title>B</title></head><body><main><p>Words here.</p></main></body></html>',
+    };
+    globalThis.fetch = async (input) => {
+      const path = new URL(String(input), 'http://localhost/').pathname;
+      const html = pages[path];
+      return html === undefined
+        ? { ok: false, status: 404, text: async () => '' }
+        : { ok: true, status: 200, text: async () => html };
+    };
+    globalThis.DOMParser = globalThis.window.DOMParser;
+
+    const sheet = new SeoPreviewSheet({
+      onFix(context) { fixes.push(context); },
+      async onRequestRoutes() {
+        return {
+          routes: Object.keys(pages).map((route) => ({ route, file: `src/pages${route}index.astro`, dynamic: false })),
+        };
+      },
+    });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('site');
+
+    const start = sheet.element.querySelector('.site-start');
+    assert.equal(start.disabled, false);
+    start.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+    // Let the walk and its per-route awaits settle.
+    for (let tick = 0; tick < 30; tick += 1) await Promise.resolve();
+    await new Promise((resolve) => globalThis.window.setTimeout(resolve, 20));
+
+    const causes = [...sheet.element.querySelectorAll('.site-cause')];
+    assert.equal(causes.length > 0, true, 'the audit produced causes');
+    assert.match(sheet.element.querySelector('.site-summary').textContent, /3 routes audited/);
+
+    // Three pages missing og:image is one cause, not three rows.
+    const image = causes.find((node) => /No og:image/.test(node.querySelector('.seo-finding-title').textContent));
+    assert.equal(image.querySelector('.site-reach').textContent, '3 of 3 routes');
+    assert.deepEqual(
+      [...image.querySelectorAll('.site-route')].map((node) => node.textContent),
+      ['/', '/products/a/', '/products/b/'],
+    );
+
+    // And a cause confined to one directory says so.
+    const confined = causes.find((node) => node.querySelector('.site-shared') !== null);
+    if (confined !== null && confined !== undefined) {
+      assert.match(confined.querySelector('.site-shared').textContent, /one template, not/);
+    }
+
+    // Fixing hands the agent the whole class with the routes as evidence.
+    image.querySelector('.seo-fix').dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(fixes.length, 1);
+    assert.match(fixes[0].title, /3 routes/);
+    assert.match(fixes[0].message, /Found on 3 of 3 routes/);
+    assert.match(fixes[0].message, /Find the shared source/);
+
+    sheet.destroy();
+  } finally {
+    delete globalThis.fetch;
+    delete globalThis.DOMParser;
+    cleanup();
+  }
+});
+
+test('the Site tab says so when the server cannot list routes', async () => {
+  const cleanup = installDom('', '<title>Home</title>');
+  try {
+    const sheet = new SeoPreviewSheet({ onFix() {} });
+    globalThis.document.body.append(sheet.element);
+    sheet.open();
+    sheet.showPane('site');
+
+    // With no route channel the audit is offered but plainly unavailable.
+    assert.equal(sheet.element.querySelector('.site-start').disabled, true);
+    assert.match(sheet.element.querySelector('.site-summary').textContent, /cannot ask the server/);
+    sheet.destroy();
+  } finally { cleanup(); }
+});
+
 test('the share preview closes on Escape', () => {
   const cleanup = installDom();
   try {
@@ -447,11 +784,18 @@ function labels(manager) {
   return tabs(manager).map((tab) => tab.querySelector('.dock-tab-label').textContent);
 }
 
+/** Which edge the dock's inset rule squeezes, if any. */
+function pageInsetEdge() {
+  const style = globalThis.document.querySelector('style[data-astro-ai="dock-inset"]');
+  if (style === null || style.parentNode === null) return undefined;
+  return style.textContent.match(/margin-(right|bottom):/)?.[1];
+}
+
 /** The inset rule the dock writes into the page's own head, if any. */
 function pageInset() {
   const style = globalThis.document.querySelector('style[data-astro-ai="dock-inset"]');
   if (style === null || style.parentNode === null) return undefined;
-  return style.textContent.match(/margin-right:\s*([^\s!]+)/)?.[1];
+  return style.textContent.match(/margin-(?:right|bottom):\s*([^\s!]+)/)?.[1];
 }
 
 function noopCallbacks() {
@@ -502,3 +846,111 @@ function installDom(markup = '', head = '') {
     }
   };
 }
+
+test('the dock can hold the bottom edge instead of the right', () => {
+  const cleanup = installDom();
+  try {
+    const reflows = [];
+    const manager = new ChatWindowManager({
+      ...noopCallbacks(),
+      onPageReflow() { reflows.push(pageInset()); },
+    });
+    manager.openAll(false, false, true);
+    manager.setLayout('fixed');
+
+    assert.equal(manager.dockSide, 'right');
+    assert.equal(manager.element.dataset.side, 'right');
+    assert.equal(pageInset(), `${DOCK_DEFAULT_WIDTH}px`);
+    assert.equal(pageInsetEdge(), 'right');
+
+    manager.toggleDockSide();
+
+    assert.equal(manager.dockSide, 'bottom');
+    assert.equal(manager.element.dataset.side, 'bottom');
+    // The page gives up height instead of width, so a narrow layout keeps
+    // its full measure.
+    assert.equal(pageInsetEdge(), 'bottom');
+    assert.equal(pageInset(), `${manager.dockHeight}px`);
+    assert.equal(
+      globalThis.document.documentElement.style.getPropertyValue('--astro-ai-dock-height'),
+      `${manager.dockHeight}px`,
+    );
+    // Only the edge actually held is published.
+    assert.equal(globalThis.document.documentElement.style.getPropertyValue('--astro-ai-dock-width'), '');
+
+    manager.toggleDockSide();
+    assert.equal(pageInsetEdge(), 'right');
+    assert.equal(globalThis.document.documentElement.style.getPropertyValue('--astro-ai-dock-height'), '');
+    // Moving the dock reflows the page, so the overlays are told each time.
+    assert.equal(reflows.length >= 2, true);
+  } finally { cleanup(); }
+});
+
+test('each edge keeps its own size', () => {
+  const cleanup = installDom();
+  try {
+    const manager = new ChatWindowManager(noopCallbacks());
+    manager.openAll(false, false, true);
+    manager.setLayout('fixed');
+
+    manager.setDockWidth(560);
+    manager.setDockSide('bottom');
+    manager.setDockHeight(300);
+    assert.equal(pageInset(), '300px');
+
+    // Width and height are different dimensions, so moving back restores the
+    // width rather than reusing the height.
+    manager.setDockSide('right');
+    assert.equal(pageInset(), '560px');
+    assert.equal(manager.dockHeight, 300);
+
+    assert.equal(clampDockHeight(10), DOCK_MIN_HEIGHT);
+    assert.equal(clampDockHeight(Number.NaN), DOCK_DEFAULT_HEIGHT);
+  } finally { cleanup(); }
+});
+
+test('the configured side applies until the user moves the dock', () => {
+  const cleanup = installDom();
+  try {
+    const manager = new ChatWindowManager(noopCallbacks());
+    manager.openAll(false, false, true);
+    manager.setLayout('fixed');
+
+    manager.setDefaultDockSide('bottom');
+    assert.equal(manager.dockSide, 'bottom');
+
+    // A default is not a choice, so it is not stored as one.
+    const restored = new ChatWindowManager(noopCallbacks());
+    assert.equal(restored.dockSide, 'right');
+
+    restored.openAll(false, false, true);
+    restored.setLayout('fixed');
+    restored.toggleDockSide();
+    restored.setDefaultDockSide('right');
+    assert.equal(restored.dockSide, 'bottom', 'the user outranks the configured side');
+
+    const reloaded = new ChatWindowManager(noopCallbacks());
+    assert.equal(reloaded.dockSide, 'bottom', 'and the choice survives a reload');
+  } finally { cleanup(); }
+});
+
+test('the side control names where the dock will go next', () => {
+  const cleanup = installDom();
+  try {
+    const manager = new ChatWindowManager(noopCallbacks());
+    manager.openAll(false, false, true);
+    const button = () => manager.element.querySelector('.dock-side-button');
+
+    // It belongs to the dock, so a floating editor does not offer it.
+    assert.equal(button().hidden, true);
+
+    manager.setLayout('fixed');
+    assert.equal(button().hidden, false);
+    assert.equal(button().querySelector('.tool-label').textContent, 'Bottom');
+    assert.match(button().getAttribute('aria-label'), /bottom of the window/);
+
+    manager.toggleDockSide();
+    assert.equal(button().querySelector('.tool-label').textContent, 'Right');
+    assert.match(button().getAttribute('aria-label'), /right of the window/);
+  } finally { cleanup(); }
+});

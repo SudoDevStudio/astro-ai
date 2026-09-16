@@ -19,7 +19,7 @@ jobs:
       - run: npm run format:check
       - run: npm run check
       - run: npm test
-      # Needs a real layout engine, so jsdom cannot stand in for it. Skips
-      # itself with a message on a runner without Chrome.
-      - run: npm run test:layout
+      # Needs a real browser, so jsdom cannot stand in for it. Skips itself
+      # with a message on a runner without Chrome.
+      - run: npm run test:browser
       - run: npm pack --dry-run

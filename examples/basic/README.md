@@ -30,7 +30,51 @@ path where the editor re-establishes itself against a swapped page.
 | `/components/` | Registered components and their typed props. |
 | `/catalog/` | One template in a loop where every card resolves its own entry. |
 | `/island/` | A React island: editable props, a repeated `.map()`, entries per row. |
+| `/shop/` | A storefront: `ItemList`, `BreadcrumbList` and a sitelinks `SearchAction`. |
+| `/shop/<product>/` | Three products through one template: `Product`, `Offer`, `AggregateRating`, `FAQPage`, `VideoObject`. |
+| `/guides/` | Buying guides as `BlogPosting`, with the byline and date a citation needs. |
+| `/store/` | The trade counter as a `LocalBusiness`, with address, hours and coordinates. |
+| `/careers/field-engineer/` | A `JobPosting`, the type with the longest required list. |
 | `/seo/` | Share preview fixtures, one page per failure mode. |
+
+### The storefront
+
+`/shop/` exists so every ecommerce schema type has somewhere real to live, and
+so the **Site** tab has something real to group. Between them the pages publish
+`Product`, `Offer`, `AggregateRating`, `Brand`, `BreadcrumbList`, `FAQPage`,
+`VideoObject`, `ItemList`, `WebSite` with a `SearchAction`, `Organization`,
+`Store`, `BlogPosting` with a `Person` author, and `JobPosting`.
+
+Two things are worth opening it for.
+
+**`/shop/torque-wrench/` publishes five entities at once.** The Google card
+gains a trail, stars, a price and a stock line; **AEO** reports six liftable
+facts and composes a strongly grounded answer:
+
+> Torque Wrench 200Nm costs USD 189.00, is rated 4.6 out of 5 from 128 reviews
+> and is listed as in stock.
+
+**One template is deliberately missing one thing.**
+`src/schema.ts` builds every product's JSON-LD and never emits `sku`. Audit the
+site and that arrives as a single row:
+
+```
+WARNING  Product has no sku
+         3 of 17 routes  →  all under /shop/
+         /shop/cable-spool/ /shop/safety-harness/ /shop/torque-wrench/
+```
+
+Three pages, one cause, one edit — which is the whole argument for the Site tab.
+**Fix everywhere** hands the agent the class and tells it to find the shared
+source rather than patch three files.
+
+`/guides/[slug].astro` is a dynamic route on purpose: the audit reads
+`src/pages` before requesting anything, so it knows the file exists but not
+which addresses it serves. It lists the route as skipped rather than guessing a
+slug and auditing a 404.
+
+The guides are the only pages here that satisfy every answer-engine check,
+because they are the only ones that say who wrote them and when.
 
 ### React island
 
@@ -65,20 +109,64 @@ The preview itself is configured with nothing at all. It reads the head of
 whatever page you are on, every time you open it, so these fixtures need only
 differ in their tags.
 
-`/seo/` holds four pages with deliberately different head metadata. Open a chat
+`/seo/` holds five pages with deliberately different head metadata. Open a chat
 window, press the green **SEO** button, and walk them:
 
 | Page | Reports | Why |
 | --- | --- | --- |
 | `/seo/` | 1 warning | `og:image` is 800×418: kept by every network, too small for the wide card. |
 | `/seo/clean/` | nothing | Every tag present and inside the limits each network truncates at. |
-| `/seo/broken/` | 3 errors, 4 warnings, 5 notes | Relative and 64×64 `og:image`, invalid `twitter:card`, `og:url` disagreeing with the canonical link, overlong title and description, `noindex`. |
-| `/seo/minimal/` | 3 errors, 4 warnings, 3 notes | A `<title>` and nothing else, so every card shows its fallback. |
+| `/seo/rich/` | nothing | Complete JSON-LD, so the Google card gains a trail, stars, a price and questions. |
+| `/seo/broken/` | 5 errors, 10 warnings, 5 notes | Relative and 64×64 `og:image`, invalid `twitter:card`, `og:url` disagreeing with the canonical link, overlong title and description, `noindex`, unparseable JSON-LD, and a Product with no price. |
+| `/seo/minimal/` | 3 errors, 4 warnings, 4 notes | A `<title>` and nothing else, so every card shows its fallback. |
 
 The head tags come from `src/components/Seo.astro`, driven by the `seo` prop each
 page passes to the layout. `seo={false}` emits nothing but a `<title>`, and
 `htmlLang={false}` drops the `lang` attribute — both only exist so the bare
 fixture can be bare.
+
+#### Structured data
+
+`/seo/rich/` is the page to open first. Its four JSON-LD blocks between them
+produce every extra a Google result can show, and the **Google** card renders
+each one:
+
+| Block | What appears on the card |
+| --- | --- |
+| `Product` | ★★★★☆ 4.6 (128), `$189.00`, and an In Stock line |
+| `BreadcrumbList` | `acme.com › Tools › Wrenches › Torque Wrench` in place of the URL |
+| `FAQPage` | Two expandable questions beneath the snippet |
+| `Organization` | The site name beside the favicon, instead of the bare domain |
+
+None of that can be expressed with meta tags, and no other network reads it —
+the seven other cards are unchanged. Delete `priceCurrency` from the offer and
+re-read the page: the price disappears from the card and an error appears on
+**Issues** saying why.
+
+The **Schema** tab draws each of those blocks as the thing it describes — the
+Product as a product, the trail as a trail — with the JSON behind a toggle, so
+nothing here needs reading braces to check.
+
+The **AEO** tab answers a different question: what an assistant can take from
+the page. `/seo/rich/` is the only fixture that satisfies it completely — a
+named subject, six facts liftable straight from schema, two quotable Q&A pairs,
+and a publisher — so the answer it affords reads:
+
+> Torque Wrench 200Nm costs USD 189.00, is rated 4.6 out of 5 from 128 reviews
+> and is listed as in stock.
+
+Walk to `/seo/minimal/` and the same panel reports no subject, no facts, and no
+canonical URL to cite, and the sentence becomes *"the page states no fact an
+assistant could quote beyond its title."* That contrast is the point of the tab.
+
+`/seo/broken/` ships two blocks worth reading: one with a trailing comma, which
+every editor tolerates and no crawler does, and one describing a product the
+page is not about, with no price. The **Schema** tab shows both, marked by
+whether they parsed.
+
+Every other page carries `schema: 'auto'`, which builds a `WebPage` and an
+`Organization` from the same values as the meta tags — so the schema agrees
+with the page by construction, which is exactly what the preview checks.
 
 `Seo.astro` builds absolute URLs from `Astro.site ?? Astro.url.origin`. This
 example deliberately leaves `site` unset, so they resolve against the dev server

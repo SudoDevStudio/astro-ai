@@ -1061,7 +1061,12 @@ export function buildContentPolicy(origins: ContentOrigin[]): string {
   if (origins.length === 0) return "";
   const unique = new Map<string, ContentOrigin>();
   for (const origin of origins)
-    unique.set(`${origin.source}:${origin.id}`, origin);
+    // Facets are part of the key: two elements of one entry rendering
+    // different fields are two things to tell the agent about, not one.
+    unique.set(
+      `${origin.source}:${origin.id}:${JSON.stringify(origin.facets ?? {})}`,
+      origin,
+    );
   const entries = [...unique.values()];
   const sourceNames = [...new Set(entries.map(({ source }) => source))];
   const mcpServers = [
@@ -1084,10 +1089,17 @@ export function buildContentPolicy(origins: ContentOrigin[]): string {
     `Content ownership: the attached selection renders content owned by ${sourceNames.join(" and ")}.`,
     "Its text and media are fetched at request time, so editing the template does not change the words, and pasting them into source hardcodes content that the next fetch contradicts.",
     "Entries behind this selection:",
-    ...entries.map(
-      (origin) =>
-        `- ${origin.source} entry ${origin.id} (read from ${origin.attribute}): ${contentEntryReference(origin)}`,
-    ),
+    ...entries.map((origin) => {
+      const facets = Object.entries(origin.facets ?? {})
+        .map(([facet, value]) => `, ${facet} ${value}`)
+        .join("");
+      return `- ${origin.source} entry ${origin.id}${facets} (read from ${origin.attribute}): ${contentEntryReference(origin)}`;
+    }),
+    ...(entries.some((origin) => origin.facets !== undefined)
+      ? [
+          "The facets named beside an entry say which part of it this selection renders; change that part rather than the whole entry.",
+        ]
+      : []),
     mcpServers.length === 0
       ? "No content MCP server is configured, so you cannot change these entries yourself."
       : `Use the ${mcpServers.join(" and ")} MCP server${mcpServers.length === 1 ? "" : "s"} already connected to this CLI to read or update these entries.`,

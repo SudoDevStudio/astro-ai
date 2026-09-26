@@ -1,3 +1,4 @@
+import type { ContentAttributeGroup } from './content-sources.js';
 import type { SelectionContext } from './selection-context.js';
 import type { SourceInsertionZone } from './selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
@@ -68,6 +69,13 @@ export type ServerReadyMessage = {
   history: PatchHistoryState;
   /** Attribute names the client collects from selected elements, in configured order. */
   contentAttributes?: string[];
+  /**
+   * The same attributes grouped by the source that declared them, so a facet
+   * resolves only against the entry it belongs to. Sent alongside
+   * `contentAttributes` rather than replacing it, so neither half of a
+   * mismatched pair loses the flat list it already understands.
+   */
+  contentGroups?: ContentAttributeGroup[];
   /** Layout the chat opens in before the user chooses one for the session. */
   chatLayout?: ChatLayoutPreference;
   /** Edge a docked chat opens against, before the user moves it. */

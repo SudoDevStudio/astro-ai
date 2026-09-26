@@ -9,6 +9,17 @@ write entries for someone deciding whether to upgrade.
 
 ## [Unreleased]
 
+### Added
+
+- A content source can declare `facets`: further attributes describing the same
+  entry, keyed by the name each one carries into agent context. An element that
+  renders one field of a CMS record can now say so, so the agent is told it is
+  looking at the `title` of product `p0` rather than only that the text belongs
+  to `p0`. An `entryUrl` may address the entry with `{facet}` alongside `{id}`.
+- Facets resolve relative to the element the entry id was found on, so an
+  element inside a nested entry never borrows a facet from the entry wrapping
+  it. Selecting a variant reports the variant, not its product's field.
+
 ## [1.3.0] - 2026-09-14
 
 ### Added

@@ -1,3 +1,4 @@
+import type { ContentAttributeGroup } from '../shared/content-sources.js';
 import type { SelectionContext, SourceInsertionZone } from '../shared/selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import { middleTruncatePath } from './action-model.js';
@@ -50,7 +51,7 @@ export class SelectionOverlay {
   #marqueeActive = false;
   #suppressClick = false;
   #viewportFrame: number | undefined;
-  #contentAttributes: string[] = [];
+  #contentGroups: ContentAttributeGroup[] = [];
   readonly #tabIndexes = new Map<HTMLElement, string | null>();
 
   constructor(callbacks: SelectionOverlayCallbacks) {
@@ -71,11 +72,6 @@ export class SelectionOverlay {
   }
 
   /**
-   * Content source attributes the server declared. Entry ids exist only in the
-   * rendered page, so the server can name the attributes but only the browser
-   * can read what is in them.
-   */
-  /**
    * Re-measures every outline, control, and anchor against the page as it is
    * now. Scrolling and viewport resizes trigger this on their own; anything
    * else that reflows the page — the dock taking or releasing its column —
@@ -85,8 +81,22 @@ export class SelectionOverlay {
     this.#onViewportChange();
   }
 
+  /**
+   * Content source attributes the server declared, grouped by the source that
+   * declared them. Entry ids exist only in the rendered page, so the server can
+   * name the attributes but only the browser can read what is in them, and only
+   * the browser can tell which entry a facet sits inside.
+   */
+  setContentGroups(groups: readonly ContentAttributeGroup[]): void {
+    this.#contentGroups = groups.map((group) => ({
+      attribute: group.attribute,
+      ...(group.facets === undefined ? {} : { facets: [...group.facets] }),
+    }));
+  }
+
+  /** The flat form, for a server that declared no facets. */
   setContentAttributes(attributes: readonly string[]): void {
-    this.#contentAttributes = [...attributes];
+    this.#contentGroups = attributes.map((attribute) => ({ attribute }));
   }
 
   /**
@@ -435,7 +445,7 @@ export class SelectionOverlay {
         item.element = relocated;
         this.#updateItem(item);
         this.#pending.set(nodeId, { element: relocated, mode: 'refresh' });
-        this.#callbacks.onInspect(nodeId, collectContentAttributes(relocated, this.#contentAttributes));
+        this.#callbacks.onInspect(nodeId, collectContentAttributes(relocated, this.#contentGroups));
       }
       this.#syncSelection();
     }, 60);
@@ -444,7 +454,7 @@ export class SelectionOverlay {
   #inspect(element: HTMLElement, nodeId: string, mode: SelectionMode, point?: AnchorPoint): void {
     if (mode === 'replace') this.#pending.clear();
     this.#pending.set(nodeId, { element, mode, ...(point === undefined ? {} : { point }) });
-    this.#callbacks.onInspect(nodeId, collectContentAttributes(element, this.#contentAttributes));
+    this.#callbacks.onInspect(nodeId, collectContentAttributes(element, this.#contentGroups));
   }
 
   #syncSelection(renderActions = true): void {
@@ -667,21 +677,36 @@ function marqueeCandidates(selectionRect: DOMRect): HTMLElement[] {
  */
 export function collectContentAttributes(
   element: Element,
-  attributes: readonly string[],
+  groups: readonly ContentAttributeGroup[] | readonly string[],
 ): Record<string, string> | undefined {
   const collected: Record<string, string> = {};
-  for (const attribute of attributes) {
-    let owner: Element | null = null;
-    try {
-      owner = element.closest(`[${attribute}]`);
-    } catch {
-      // An attribute name that cannot form a selector simply never resolves.
-      continue;
+  for (const group of groups) {
+    const source: ContentAttributeGroup = typeof group === 'string' ? { attribute: group } : group;
+    const owner = closestWithAttribute(element, source.attribute);
+    const id = owner?.getAttribute(source.attribute)?.trim();
+    if (owner === undefined || id === undefined || id === '') continue;
+    collected[source.attribute] = id;
+    for (const attribute of source.facets ?? []) {
+      const facetOwner = closestWithAttribute(element, attribute);
+      // A facet describes this entry only when it sits on the entry's own
+      // element or inside it. One found further up belongs to the entry that
+      // wraps this one, and reporting it here would attribute a field of the
+      // product to its variant.
+      if (facetOwner === undefined || !owner.contains(facetOwner)) continue;
+      const value = facetOwner.getAttribute(attribute)?.trim();
+      if (value !== undefined && value !== '') collected[attribute] = value;
     }
-    const value = owner?.getAttribute(attribute)?.trim();
-    if (value !== undefined && value !== '') collected[attribute] = value;
   }
   return Object.keys(collected).length === 0 ? undefined : collected;
+}
+
+function closestWithAttribute(element: Element, attribute: string): Element | undefined {
+  try {
+    return element.closest(`[${attribute}]`) ?? undefined;
+  } catch {
+    // An attribute name that cannot form a selector simply never resolves.
+    return undefined;
+  }
 }
 
 function findSourceElement(target: EventTarget | null): HTMLElement | undefined {

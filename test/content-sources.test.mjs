@@ -341,3 +341,119 @@ test('carries entry context into the agent prompt for the attached selection', (
   assert.match(prompt, /Content ownership: the attached selection renders content owned by contentful\./);
   assert.match(prompt, /shorten this headline/);
 });
+
+const stamp = {
+  name: 'stamp',
+  attribute: 'data-stamp-id',
+  facets: { type: 'data-stamp-type', field: 'data-stamp-field' },
+};
+
+test('declares facet attributes alongside the entry id they describe', () => {
+  const registry = new ContentSourceRegistry([stamp, headless]);
+
+  // The flat list stays the allow-list for what may come back.
+  assert.deepEqual(registry.attributes, [
+    'data-stamp-id',
+    'data-stamp-type',
+    'data-stamp-field',
+    'data-legacy-ref',
+  ]);
+  // The grouping is what lets the client tell which id a facet belongs to.
+  assert.deepEqual(registry.groups, [
+    { attribute: 'data-stamp-id', facets: ['data-stamp-type', 'data-stamp-field'] },
+    { attribute: 'data-legacy-ref' },
+  ]);
+});
+
+test('rejects facet declarations that could not resolve', () => {
+  assert.throws(
+    () => normalizeContentSources([{ ...stamp, facets: { id: 'data-other' } }]),
+    /facet named “id”/i,
+  );
+  assert.throws(
+    () => normalizeContentSources([{ ...stamp, facets: { '1st': 'data-other' } }]),
+    /facet name/i,
+  );
+  // Ids and facets share one namespace, because a value coming back names only
+  // its attribute and two claimants could not be told apart.
+  assert.throws(
+    () => normalizeContentSources([{ name: 'a', attribute: 'data-id', facets: { type: 'DATA-ID' } }]),
+    /already claimed/i,
+  );
+  assert.throws(
+    () => normalizeContentSources([{ name: 'a', attribute: 'data-id', facets: { type: 'not valid' } }]),
+    /valid DOM attribute name/i,
+  );
+  assert.throws(
+    () => normalizeContentSources([{ name: 'a', attribute: 'data-id', facets: ['type'] }]),
+    /facets must be an object/i,
+  );
+  assert.throws(
+    () => normalizeContentSources([{ name: 'a', attribute: 'data-id', entryUrl: 'https://cms.test/{kind}/{id}' }]),
+    /\{kind\}, which is not a declared facet/i,
+  );
+});
+
+test('resolves facets and fills them into the entry address', () => {
+  const registry = new ContentSourceRegistry([
+    { ...stamp, entryUrl: 'https://cms.test/{type}/{id}' },
+  ]);
+
+  const [origin] = registry.resolve({
+    'data-stamp-id': 'p0',
+    'data-stamp-type': 'product',
+    'data-stamp-field': 'title',
+  });
+  assert.deepEqual(origin.facets, { type: 'product', field: 'title' });
+  assert.equal(origin.url, 'https://cms.test/product/p0');
+  assert.match(describeContentOrigin(origin), /^stamp: entry p0 · type product · field title · https:/);
+
+  // A template naming a facet cannot address the entry without it, so no URL
+  // beats one with an unfilled placeholder left in it.
+  const [partial] = registry.resolve({ 'data-stamp-id': 'p0' });
+  assert.equal(partial.url, undefined);
+  assert.equal(partial.facets, undefined);
+  assert.equal(contentEntryReference(partial), 'p0');
+});
+
+test('reads a facet only from within the entry it belongs to', () => {
+  const registry = new ContentSourceRegistry([stamp]);
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <article data-stamp-type="product" data-stamp-id="p0" data-stamp-field="title">
+      <h1 id="title" data-stamp-field="title" data-stamp-type="product" data-stamp-id="p0">Rugged Runner</h1>
+      <li id="variant" data-stamp-type="variant" data-stamp-id="p0v0">Bone / 39</li>
+    </article>
+  </body></html>`);
+  const at = (id) => collectContentAttributes(dom.window.document.getElementById(id), registry.groups);
+
+  assert.deepEqual(at('title'), {
+    'data-stamp-id': 'p0',
+    'data-stamp-type': 'product',
+    'data-stamp-field': 'title',
+  });
+  // The variant has no field of its own and the product's sits outside it, so
+  // nothing is borrowed from the entry that wraps it.
+  assert.deepEqual(at('variant'), {
+    'data-stamp-id': 'p0v0',
+    'data-stamp-type': 'variant',
+  });
+});
+
+test('tells the agent which part of an entry each facet names', () => {
+  const registry = new ContentSourceRegistry([stamp]);
+  const policy = buildContentPolicy([
+    ...registry.resolve({ 'data-stamp-id': 'p0', 'data-stamp-field': 'title' }),
+    ...registry.resolve({ 'data-stamp-id': 'p0', 'data-stamp-field': 'description' }),
+  ]);
+
+  // Two fields of one entry are two things to report, not one deduplicated row.
+  assert.match(policy, /- stamp entry p0, field title \(read from data-stamp-id\)/);
+  assert.match(policy, /- stamp entry p0, field description \(read from data-stamp-id\)/);
+  assert.match(policy, /say which part of it this selection renders/);
+
+  // An entry with no facets says nothing about parts.
+  assert.doesNotMatch(
+    buildContentPolicy(new ContentSourceRegistry([headless]).resolve({ 'data-legacy-ref': 'legacy-1' })),
+    /which part of it this selection renders/,
+  );
+});

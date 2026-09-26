@@ -335,6 +335,11 @@ function originDetail(origin: ContentOrigin): HTMLElement {
     definitionNode('Entry id', id),
     definition('Attribute', origin.attribute),
   );
+  // A facet is labelled with the name the project chose for it, so the row
+  // reads back as whatever the configuration called it.
+  for (const [facet, value] of Object.entries(origin.facets ?? {})) {
+    group.append(definition(`${facet.charAt(0).toUpperCase()}${facet.slice(1)}`, value));
+  }
   if (origin.url !== undefined) group.append(definition('Entry URL', origin.url));
   if (origin.mcp !== undefined) group.append(definition('MCP server', origin.mcp));
   if (origin.docs !== undefined) group.append(definition('Docs', origin.docs));

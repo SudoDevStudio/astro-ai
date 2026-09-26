@@ -100,7 +100,8 @@ buildWithAI({
 | --- | --- |
 | `name` | Names the source in agent context and on the selection chip |
 | `attribute` | DOM attribute holding the entry id |
-| `entryUrl` | Entry address template; `{id}` is replaced with the encoded id |
+| `facets` | Further attributes describing the same entry, keyed by the name each carries into agent context |
+| `entryUrl` | Entry address template; `{id}` is replaced with the encoded id, and `{facet}` with that facet's value |
 | `docs` | Documentation the agent consults before proposing a content change |
 | `mcp` | MCP server already connected to your CLI that can read and write entries |
 | `instructions` | Extra guidance appended to the agent's content policy |
@@ -108,6 +109,48 @@ buildWithAI({
 Only `name` and `attribute` are required, and at most 12 sources may be
 declared. The attribute name is yours to choose; a `data-` prefix is a
 convention of CMS clients, not a requirement.
+
+### Facets
+
+An entry id says *which* record an element belongs to. A facet says something
+more about it — which type it is, or which of its fields this element renders.
+Declare one attribute per facet, and up to eight per source:
+
+```js
+buildWithAI({
+  contentSources: [
+    {
+      name: 'stamp',
+      attribute: 'data-stamp-id',
+      facets: { type: 'data-stamp-type', field: 'data-stamp-field' },
+      entryUrl: 'https://cms.example.com/{type}/{id}',
+    },
+  ],
+});
+```
+
+```html
+<article data-stamp-type="product" data-stamp-id="p0">
+  <h1 data-stamp-field="title" data-stamp-type="product" data-stamp-id="p0">Rugged Runner</h1>
+  <li data-stamp-type="variant" data-stamp-id="p0v0">Bone / 39</li>
+</article>
+```
+
+Selecting the heading tells the agent it is looking at the `title` field of
+product `p0`, rather than only that the text belongs to `p0`.
+
+A facet is read relative to the element the entry id was found on, so it counts
+only when it sits on that element or inside it. Selecting the variant above
+resolves `p0v0` and its own `variant` type, and does **not** borrow the
+product's `title` — a facet further up the tree describes the entry that wraps
+this one, not this one.
+
+Facet names are yours, except `id`, which is the entry id itself. Facet
+attributes share one namespace with entry attributes, because a value coming
+back from the page names only its attribute: two sources claiming the same
+attribute could not be told apart. A `entryUrl` naming a facet resolves to no
+URL at all when that facet is missing, rather than to an address with an
+unfilled placeholder left in it.
 
 The id is read from the selected element or its nearest ancestor carrying the
 attribute, because CMS clients usually mark the wrapper rather than the heading

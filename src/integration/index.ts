@@ -350,10 +350,12 @@ export default function buildWithAI(
           logger.debug(`Toolbar connected for route ${message.route}.`);
           await activeEngine.transactions.ready();
           const contentAttributes = activeResolver.contentSources.attributes;
+          const contentGroups = activeResolver.contentSources.groups;
           toolbar.send<ServerReadyMessage>(SERVER_EVENTS.ready, {
             protocolVersion: PROTOCOL_VERSION,
             history: activeEngine.transactions.state(),
             ...(contentAttributes.length === 0 ? {} : { contentAttributes }),
+            ...(contentGroups.length === 0 ? {} : { contentGroups }),
             ...(chatLayout === undefined ? {} : { chatLayout }),
             ...(dockSide === undefined ? {} : { dockSide }),
             ...(seoPreview === undefined ? {} : { seo: seoPreview }),

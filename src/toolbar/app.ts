@@ -178,9 +178,12 @@ export default defineToolbarApp({
       restoringOpenState = false;
     });
 
-    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes, chatLayout, dockSide, seo }) => {
+    server.on<ServerReadyMessage>(SERVER_EVENTS.ready, ({ protocolVersion, history, agent, contentAttributes, contentGroups, chatLayout, dockSide, seo }) => {
       if (disposed || protocolVersion !== PROTOCOL_VERSION) return;
-      overlay.setContentAttributes(contentAttributes ?? []);
+      // Groups say which facets belong to which entry, so they win. The flat
+      // list stays the fallback for a server that declares no facets at all.
+      if (contentGroups !== undefined) overlay.setContentGroups(contentGroups);
+      else overlay.setContentAttributes(contentAttributes ?? []);
       windows.setDefaultLayout(chatLayout);
       windows.setDefaultDockSide(dockSide);
       windows.setSeoAvailable(seo !== false);

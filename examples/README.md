@@ -21,6 +21,15 @@ by restarting the dev server.
 | [with-solid](with-solid) | Solid JSX | full |
 | [with-vue](with-vue) | Vue SFC | Astro pages only |
 | [with-svelte](with-svelte) | Svelte | Astro pages only |
+| [with-dom-stamp](with-dom-stamp) | none | full |
+
+## Fetched content
+
+[with-dom-stamp](with-dom-stamp) is the one example whose words do not come
+from its own source. It fetches an API route and lets
+`@sudodevstudio/astro-dom-stamp` mark what comes back, so selecting an element
+resolves the entry *and* the field behind it. It is where to look when the
+question is about content the template does not own.
 
 ## What "full" means
 

@@ -1,0 +1,44 @@
+---
+import { listProducts } from '../lib/api.ts';
+
+// Fetched at request time, so the values arrive as a response rather than as a
+// module the template already had. Nothing on this page declares an attribute:
+// every data-stamp-* below is written by the browser stamper from markers that
+// travelled inside the strings.
+const products = await listProducts(Astro.url);
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Catalogue</title>
+  </head>
+  <body>
+    <main>
+      <h1>Catalogue</h1>
+      <p>
+        Open the <strong>Build with AI</strong> toolbar app, select a heading,
+        and the selection reports the entry it belongs to and the field it
+        renders. Select a variant label and it reports the variant, not the
+        product around it.
+      </p>
+
+      {
+        products.map((product) => (
+          <article>
+            <h2>{product.title}</h2>
+            <p>{product.description}</p>
+            <p>{product.price}</p>
+            <p>{product.sku}</p>
+            <ul>
+              {product.variants.map((variant) => (
+                <li>{variant.label}</li>
+              ))}
+            </ul>
+          </article>
+        ))
+      }
+    </main>
+  </body>
+</html>

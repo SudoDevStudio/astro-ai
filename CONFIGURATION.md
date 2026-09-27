@@ -24,6 +24,7 @@ export default defineConfig({
 | --- | --- | --- |
 | `agent` | `'codex' \| 'claude' \| object \| false` | none |
 | `contentSources` | `ContentSource[]` | `[]` |
+| `domStamp` | `object` | none |
 | `visualComponents` | `VisualComponent[]` | `[]` |
 | `skills` | `string[]` | `[]` |
 | `excludeDirectories` | `string[]` | see below |
@@ -160,6 +161,61 @@ belong to a CMS entry, a product record, and a translation key at once.
 An invalid declaration is reported in the terminal and content sources are
 skipped; the dev server still starts. `entryUrl` must contain `{id}` and must be
 an `http` or `https` URL.
+
+## `domStamp`
+
+Registers [`@sudodevstudio/astro-dom-stamp`][dom-stamp] and reads what it
+writes, so content that arrives from a fetch can be selected by the entry — and
+the field — behind it.
+
+```js
+buildWithAI({
+  domStamp: {
+    read: ['_type', 'id', 'sku'],
+    deepStamps: true,
+    enabled: process.env.EDIT === 'true',
+  },
+});
+```
+
+These are dom-stamp's own options, not the integration it returns. The editor
+registers the integration with them and asks dom-stamp which attributes it will
+write, then builds the content source from the answer: `data-stamp-id` becomes
+the entry id, and `data-stamp-type`, `data-stamp-sku`, and — with `deepStamps` —
+`data-stamp-field` become its facets. The attribute names are never declared
+twice, so the half that writes them and the half that reads them cannot drift.
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| dom-stamp's own options | `read`, `deepStamps`, `attributePrefix`, `sources`, … passed through unchanged | see its README |
+| `entryKey` | Which `read` key carries the entry id | `id` when it is read, else the first key |
+| `source` | `name`, `entryUrl`, `docs`, `mcp`, and `instructions` for the derived source | name `stamp` |
+
+An `entryUrl` can address the entry by its facets as well as its id:
+
+```js
+buildWithAI({
+  domStamp: {
+    read: ['_type', 'id'],
+    enabled: editing,
+    source: {
+      name: 'cms',
+      entryUrl: 'https://cms.example.com/{type}/{id}',
+      mcp: 'cms',
+    },
+  },
+});
+```
+
+Stamping is decided at build time, so `enabled` has to come from something the
+build knows, and the edit build and the production build are separate runs.
+With `enabled: false` dom-stamp registers nothing at all.
+
+An invalid declaration is reported in the terminal and dom-stamp is not
+registered; the dev server still starts. See
+[`examples/with-dom-stamp`](examples/with-dom-stamp) for a working app.
+
+[dom-stamp]: https://github.com/SudoDevStudio/astro-dom-stamp
 
 ## `visualComponents`
 

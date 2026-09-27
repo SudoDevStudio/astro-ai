@@ -19,6 +19,12 @@ write entries for someone deciding whether to upgrade.
 - Facets resolve relative to the element the entry id was found on, so an
   element inside a nested entry never borrows a facet from the entry wrapping
   it. Selecting a variant reports the variant, not its product's field.
+- A `domStamp` option registers `@sudodevstudio/astro-dom-stamp` and derives
+  its content source from the same declaration. It takes dom-stamp's own
+  options rather than the integration they build, so the editor can ask which
+  attributes will be stamped and read exactly those back — the entry id and
+  its facets are configured once instead of restated. `examples/with-dom-stamp`
+  is a working app whose content arrives from a fetch.
 
 ## [1.3.0] - 2026-09-14
 

@@ -52,6 +52,7 @@ import { VisualCommandEngine } from '../visual/command-engine.js';
 import { PatchTransactionStore } from '../visual/patch-transactions.js';
 import { VisualCapabilityResolver } from '../visual/capability-resolver.js';
 import { buildAIVitePlugin } from '../vite/build-ai-plugin.js';
+import { contentSourceFromDomStamp, type DomStampOption } from './dom-stamp.js';
 
 const TOOLBAR_APP_ID = 'astro-ai';
 const TOOLBAR_APP_ENTRYPOINT = new URL('../toolbar/app.js', import.meta.url);
@@ -78,6 +79,15 @@ export type BuildWithAIOptions = {
   visualComponents?: VisualComponentDefinition[];
   /** CMS and other external systems that own rendered content, keyed by a DOM attribute. */
   contentSources?: ContentSourceDefinition[];
+  /**
+   * Registers `astro-dom-stamp` and reads what it writes.
+   *
+   * These are dom-stamp's own options, not the integration it returns, because
+   * the attributes it stamps are the attributes the editor has to look for.
+   * Taking the options means the content source behind them is derived rather
+   * than restated, so the two halves cannot drift apart.
+   */
+  domStamp?: DomStampOption;
   /**
    * Layout the chat opens in. The toolbar remembers whatever the user switches
    * to for the rest of the session, so this is a starting point, not a lock.
@@ -202,12 +212,40 @@ export default function buildWithAI(
   return {
     name: TOOLBAR_APP_ID,
     hooks: {
-      'astro:config:setup': ({ config, command, addDevToolbarApp, updateConfig, logger }) => {
+      'astro:config:setup': async ({ config, command, addDevToolbarApp, updateConfig, logger }) => {
         if (command !== 'dev') return;
+
+        // dom-stamp writes the attributes and the editor reads them, so the
+        // source describing them is derived from one configuration rather than
+        // declared twice. Registering the integration here means the project
+        // lists it once, beside the editor that depends on it.
+        let declaredSources = options.contentSources ?? [];
+        if (options.domStamp !== undefined) {
+          try {
+            declaredSources = [...declaredSources, contentSourceFromDomStamp(options.domStamp)];
+            // Imported here rather than at the top of the file, and typed
+            // against our own `AstroIntegration`, on purpose. dom-stamp's entry
+            // declaration opens with `import type { AstroIntegration } from
+            // 'astro'`, which resolves to whichever copy of Astro sits beside
+            // dom-stamp — a different one from ours whenever it is linked from
+            // a checkout. Two structurally identical `AstroIntegration` types
+            // in one program make the compiler compare them on every
+            // Astro-typed call in this file, and it falls over doing it.
+            // A static import here reintroduces that.
+            const domStampModule = await import('@sudodevstudio/astro-dom-stamp');
+            const createDomStamp = domStampModule.default as unknown as (
+              options: DomStampOption,
+            ) => AstroIntegration;
+            updateConfig({ integrations: [createDomStamp(options.domStamp)] });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : 'Invalid domStamp configuration.';
+            logger.error(`[astro-ai] ${detail} dom-stamp is not registered.`);
+          }
+        }
 
         let contentSources = new ContentSourceRegistry();
         try {
-          contentSources = new ContentSourceRegistry(options.contentSources);
+          contentSources = new ContentSourceRegistry(declaredSources);
         } catch (error) {
           // Content origins enrich context rather than carry it, so a bad
           // declaration is reported and skipped instead of stopping dev.

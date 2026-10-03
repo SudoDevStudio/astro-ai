@@ -63,7 +63,7 @@
   "dependencies": {
     "@astrojs/compiler-rs": "^0.4.0",
     "@babel/parser": "^7.29.8",
-    "@sudodevstudio/astro-dom-stamp": "file:../astro-dom-stamp",
+    "@sudodevstudio/astro-dom-stamp": "^0.2.0",
     "magic-string": "^1.0.0"
   },
   "peerDependencies": {

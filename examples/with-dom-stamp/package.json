@@ -1,0 +1,23 @@
+{
+  "name": "astro-ai-example-with-dom-stamp",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "predev": "npm --prefix ../.. run build",
+    "dev": "ASTRO_DOM_STAMP_EDIT=true astro dev",
+    "dev:plain": "astro dev",
+    "prebuild": "npm --prefix ../.. run build",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^7.2.9",
+    "@astrojs/node": "^11.1.6"
+  },
+  "devDependencies": {
+    "@sudodevstudio/astro-ai": "file:../.."
+  }
+}

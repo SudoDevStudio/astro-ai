@@ -112,9 +112,10 @@ agent bridge is disabled when Astro listens beyond loopback — see
 
 ## Examples
 
-[`examples/`](examples) holds six Astro apps wired to this repository rather
-than to npm: [`basic`](examples/basic) is the broadest tour, plus one app per
-island framework.
+[`examples/`](examples) holds seven Astro apps wired to this repository rather
+than to npm: [`basic`](examples/basic) is the broadest tour, one app per island
+framework, and [`with-dom-stamp`](examples/with-dom-stamp) for content that
+arrives from a fetch rather than from the template.
 
 ```sh
 npm install

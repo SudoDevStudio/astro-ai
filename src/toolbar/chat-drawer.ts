@@ -659,7 +659,9 @@ export class ChatDrawer {
       ? 'Fix this development error.'
       : context.kind === 'seo'
         ? 'Fix these share preview issues in the head metadata for this route.'
-        : 'Fix this audit issue.';
+        : context.kind === 'performance'
+          ? 'Make this section load faster. Keep its output identical.'
+          : 'Fix this audit issue.';
     this.#syncComposer();
   }
 
@@ -1460,7 +1462,7 @@ export function isSendShortcut(
 }
 
 export function externalContextLabel(kind: AgentExternalContext['kind']): string {
-  return kind === 'error' ? 'Error' : kind === 'seo' ? 'SEO' : 'Audit';
+  return kind === 'error' ? 'Error' : kind === 'seo' ? 'SEO' : kind === 'performance' ? 'Perf' : 'Audit';
 }
 
 export function chatWindowCollapseControl(minimized: boolean): {

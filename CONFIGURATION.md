@@ -33,6 +33,7 @@ export default defineConfig({
 | `chatLayout` | `'floating' \| 'fixed'` | `'floating'` |
 | `dockSide` | `'right' \| 'bottom'` | `'right'` |
 | `seo` | `object \| false` | all networks |
+| `renderTiming` | `boolean` | `true` |
 
 Nothing is required. `buildWithAI()` with no arguments gives you selection,
 inspection, literal text and prop editing, reordering, insertion, removal, undo
@@ -403,6 +404,39 @@ preview falls back to showing all of them, rather than silently rendering one
 card fewer.
 
 `seo: false` hides the button entirely.
+
+## `renderTiming`
+
+Select an element and choose **Perf** to see what it costs:
+
+- **This element**: whether it is (or contains) the Largest Contentful Paint,
+  with the time split into TTFB, load delay, load and render delay; layout
+  shifts it caused; its images with load time, size, and whether they are
+  lazy; and its slowest interaction.
+- **Server render**: how long each `.astro` frontmatter behind it ran — the
+  file it is written in, every component above it, and the component itself
+  when you selected a component — and every server-side `fetch` those
+  frontmatters made, with status, size and duration, the slowest marked.
+- **Page**: TTFB, FCP, LCP, CLS and INP for scale.
+
+It also points out patterns worth a look: the same URL fetched more than once
+in a render, a component that awaits fetches one after another, a lazy or
+low-priority LCP image, an image much larger than it is shown. **Ask AI to
+speed this up** hands the whole summary to the agent.
+
+The browser half needs nothing. The server half wraps `fetch` on the dev
+server and adds one call at the start and end of each `.astro` frontmatter, so
+a call can be traced back to the component that made it, however many helpers
+it passes through. Turn that off with:
+
+```js
+buildWithAI({ renderTiming: false });
+```
+
+The numbers come from the dev server, which serves modules unbundled and
+caches nothing. Use them to compare sections and fetches against each other,
+not as a forecast of production. Fetches made by islands in the browser are
+counted on the page, not attributed to a section.
 
 ## Recipes
 

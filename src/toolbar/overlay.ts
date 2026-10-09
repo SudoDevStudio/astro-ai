@@ -2,7 +2,7 @@ import type { ContentAttributeGroup } from '../shared/content-sources.js';
 import type { SelectionContext, SourceInsertionZone } from '../shared/selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import { middleTruncatePath } from './action-model.js';
-import { ContextualActionBar } from './contextual-actions.js';
+import { ContextualActionBar, type ContextualActionCallbacks } from './contextual-actions.js';
 import { EDITOR_LAYERS } from './layers.js';
 
 const NODE_SELECTOR = '[data-astro-ai-id]';
@@ -28,6 +28,8 @@ export type SelectionOverlayCallbacks = {
   onClear(): void;
   onSelectionChange(contexts: SelectionContext[], elements: HTMLElement[]): void;
   onSelectionAnchorChange(rect?: DOMRect): void;
+  onPerformance?: ContextualActionCallbacks['onPerformance'];
+  onPerformanceFix?: ContextualActionCallbacks['onPerformanceFix'];
 };
 
 export class SelectionOverlay {
@@ -63,6 +65,8 @@ export class SelectionOverlay {
       onAskAI: (contexts) => callbacks.onAskAI(contexts, this.#elementsFor(contexts)),
       onClear: () => this.clearSelection(),
       onClickThrough: (target) => this.clickThrough(target),
+      ...(callbacks.onPerformance === undefined ? {} : { onPerformance: callbacks.onPerformance }),
+      ...(callbacks.onPerformanceFix === undefined ? {} : { onPerformanceFix: callbacks.onPerformanceFix }),
     });
     document.documentElement.append(this.#hover, this.#marquee);
   }

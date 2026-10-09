@@ -1,7 +1,9 @@
 import { describeContentOrigin, type ContentOrigin } from '../shared/content-sources.js';
+import type { AgentExternalContext } from '../shared/protocol.js';
 import type { SelectionContext } from '../shared/selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
 import { EDITOR_LAYERS } from './layers.js';
+import { performanceDetail, type PerformanceSnapshot } from './performance-panel.js';
 import {
   contextualActions,
   type ContextualActionId,
@@ -14,6 +16,10 @@ export type ContextualActionCallbacks = {
   onClear(): void;
   /** Delivers a real click to the selected element. Returns false if it is gone. */
   onClickThrough?(target: HTMLElement): boolean;
+  /** Measures the selected element and fetches its server render timings. */
+  onPerformance?(context: SelectionContext, target: HTMLElement): Promise<PerformanceSnapshot>;
+  /** Hands a performance summary to the agent. */
+  onPerformanceFix?(context: AgentExternalContext): void;
 };
 
 type AnchorPoint = { x: number; y: number };
@@ -27,6 +33,8 @@ export class ContextualActionBar {
   #target: HTMLElement | undefined;
   #point: AnchorPoint | undefined;
   #activeDetail: ContextualActionId | undefined;
+  /** Bumped per measurement, so a slow answer for an old selection is dropped. */
+  #performanceRun = 0;
 
   constructor(callbacks: ContextualActionCallbacks) {
     this.#callbacks = callbacks;
@@ -182,7 +190,36 @@ export class ContextualActionBar {
     if (this.#activeDetail === 'props') return this.#propsDetail(this.#context);
     if (this.#activeDetail === 'move') return this.#moveDetail(this.#context);
     if (this.#activeDetail === 'source') return sourceDetail(this.#context);
+    if (this.#activeDetail === 'perf') return this.#performanceDetail(this.#context);
     return undefined;
+  }
+
+  #performanceDetail(context: SelectionContext): HTMLElement {
+    const detail = element('div', 'detail perf-detail');
+    const target = this.#target;
+    const measure = this.#callbacks.onPerformance;
+    if (target === undefined || measure === undefined) {
+      const note = element('p', 'muted');
+      note.textContent = 'Performance data is not available here.';
+      detail.append(note);
+      return detail;
+    }
+    const loading = element('p', 'muted');
+    loading.textContent = 'Measuring…';
+    detail.append(loading);
+    const run = ++this.#performanceRun;
+    void measure(context, target).then(
+      (snapshot) => {
+        if (run !== this.#performanceRun || this.#context !== context || this.#activeDetail !== 'perf') return;
+        detail.replaceChildren(...performanceDetail(context, snapshot, this.#callbacks.onPerformanceFix));
+        requestAnimationFrame(() => this.reposition());
+      },
+      (error: unknown) => {
+        if (run !== this.#performanceRun) return;
+        loading.textContent = error instanceof Error ? error.message : 'Could not measure this element.';
+      },
+    );
+    return detail;
   }
 
   #editDetail(context: SelectionContext): HTMLElement {
@@ -447,6 +484,27 @@ function createStyle(): HTMLStyleElement {
     .entry-id { color: #86efac; }
     .warning { background: #422006; border: 1px solid #854d0e; border-radius: 5px; color: #fde68a; margin: 0; padding: 7px; }
     .muted { color: #aeb6c5; margin: 0; }
+    .perf-detail { gap: 10px; }
+    .perf-section { display: grid; gap: 5px; }
+    .perf-section h4 { color: #939cab; font-size: 10px; letter-spacing: .04em; margin: 0; text-transform: uppercase; }
+    .perf-metrics { display: flex; flex-wrap: wrap; gap: 5px; }
+    .perf-metric { background: #1b1f27; border: 1px solid #343a46; border-radius: 5px; display: grid; min-width: 58px; padding: 4px 7px; }
+    .perf-metric span { color: #939cab; font-size: 10px; }
+    .perf-metric strong { font-variant-numeric: tabular-nums; }
+    .perf-metric[data-rating='good'] strong { color: #86efac; }
+    .perf-metric[data-rating='needs-improvement'] strong { color: #fde68a; }
+    .perf-metric[data-rating='poor'] strong { color: #fca5a5; }
+    .perf-rows { display: grid; gap: 3px; }
+    .perf-row { align-items: center; display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) 54px 64px; }
+    .perf-row .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .perf-row .value { font-variant-numeric: tabular-nums; text-align: right; }
+    .perf-row[data-slowest='true'] .value { color: #fca5a5; font-weight: 700; }
+    .perf-bar { background: #252a34; border-radius: 3px; height: 6px; position: relative; }
+    .perf-bar i { background: #8b5cf6; border-radius: 3px; height: 100%; position: absolute; }
+    .perf-row[data-slowest='true'] .perf-bar i { background: #f87171; }
+    .perf-row[data-error='true'] .label { color: #fca5a5; }
+    .perf-hints { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+    .perf-hints li { background: #2a2210; border: 1px solid #5c4a1a; border-radius: 5px; color: #fde68a; padding: 5px 7px; }
   `;
   return style;
 }

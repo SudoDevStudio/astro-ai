@@ -9,6 +9,8 @@ import {
   type HistoryChangedMessage,
   type InsertionZonesResolvedMessage,
   type OperationCompletedMessage,
+  type RenderTimingRequestMessage,
+  type RenderTimingResolvedMessage,
   type SelectionResolvedMessage,
   type ServerReadyMessage,
   type SiteRoutesRequestMessage,
@@ -20,6 +22,8 @@ import { createChatDrawerStyle } from './chat-drawer.js';
 import { ChatWindowManager } from './chat-windows.js';
 import { DiagnosticActionBridge } from './diagnostic-actions.js';
 import { SelectionOverlay } from './overlay.js';
+import { PagePerformanceMonitor, sectionTiming } from './performance.js';
+import type { PerformanceSnapshot } from './performance-panel.js';
 import type { PageRoute } from '../shared/page-routes.js';
 import { createSeoSheetStyle, SeoPreviewSheet } from './seo-sheet.js';
 
@@ -32,6 +36,10 @@ export default defineToolbarApp({
     const pendingInspectRequests = new Map<string, string>();
     type RouteReply = { routes: PageRoute[]; message?: string };
     const pendingRouteRequests = new Map<string, (reply: RouteReply) => void>();
+    const pendingTimingRequests = new Map<string, (reply: RenderTimingResolvedMessage | undefined) => void>();
+    // Started now rather than on first use: observers are buffered, but layout
+    // shifts and interactions only exist once they have been observed.
+    const performanceMonitor = new PagePerformanceMonitor();
     let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
     let seoSheet: SeoPreviewSheet;
@@ -129,6 +137,20 @@ export default defineToolbarApp({
       onSelectionAnchorChange(rect) {
         windows.setSelectionAnchor(rect);
       },
+      async onPerformance(context, target) {
+        const reply = await requestRenderTiming();
+        const snapshot: PerformanceSnapshot = {
+          element: performanceMonitor.element(target),
+          page: performanceMonitor.page(),
+        };
+        if (reply?.timing !== undefined) snapshot.section = sectionTiming(reply.timing, context);
+        else if (reply === undefined) snapshot.serverNote = 'The dev server did not answer with render timings.';
+        else if (!reply.enabled) snapshot.serverNote = 'Server render timing is off (renderTiming: false).';
+        return snapshot;
+      },
+      onPerformanceFix(context) {
+        openWithExternalContext(context);
+      },
     });
     const openWithExternalContext = (context: Parameters<typeof windows.openWithExternalContext>[0]): void => {
       overlay.clearSelection();
@@ -207,6 +229,12 @@ export default defineToolbarApp({
       pendingRouteRequests.delete(requestId);
       pending({ routes, ...(message === undefined ? {} : { message }) });
     });
+    server.on<RenderTimingResolvedMessage>(SERVER_EVENTS.renderTiming, (message) => {
+      const pending = pendingTimingRequests.get(message.requestId);
+      if (pending === undefined) return;
+      pendingTimingRequests.delete(message.requestId);
+      pending(message);
+    });
     server.on<InsertionZonesResolvedMessage>(SERVER_EVENTS.insertionZones, ({ requestId, zones }) => {
       if (disposed || requestId !== insertionZonesRequestId) return;
       insertionZonesRequestId = undefined;
@@ -266,8 +294,11 @@ export default defineToolbarApp({
     // into it. Every selection and node id then refers to a page that is gone,
     // and the view transition can leave the chat windows hidden behind its
     // snapshot, so the editor re-establishes itself against the new page.
+    const initialPath = window.location.pathname;
+    let navigatedClientSide = false;
     const onNavigation = (): void => {
       if (disposed) return;
+      if (window.location.pathname !== initialPath) navigatedClientSide = true;
       ensureMounted();
       overlay.clearSelection();
       windows.handleNavigation();
@@ -291,6 +322,7 @@ export default defineToolbarApp({
       document.removeEventListener('astro:page-load', onNavigation);
       window.removeEventListener('popstate', onNavigation);
       overlay.destroy();
+      performanceMonitor.destroy();
       diagnosticActions.destroy();
       seoSheet.destroy();
       windows.destroy();
@@ -324,6 +356,31 @@ export default defineToolbarApp({
           resolve(reply);
         });
         server.send<SiteRoutesRequestMessage>(CLIENT_EVENTS.siteRoutes, { requestId });
+      });
+    }
+
+    /**
+     * This document's server render, named by the id the dev server put in its
+     * `Server-Timing` header. A client-side navigation keeps the first
+     * document's header, so after one the route's latest render answers.
+     */
+    function requestRenderTiming(): Promise<RenderTimingResolvedMessage | undefined> {
+      const requestId = createRequestId();
+      const renderId = navigatedClientSide ? undefined : performanceMonitor.renderId();
+      return new Promise((resolve) => {
+        const timer = window.setTimeout(() => {
+          pendingTimingRequests.delete(requestId);
+          resolve(undefined);
+        }, 3000);
+        pendingTimingRequests.set(requestId, (reply) => {
+          window.clearTimeout(timer);
+          resolve(reply);
+        });
+        server.send<RenderTimingRequestMessage>(CLIENT_EVENTS.renderTiming, {
+          requestId,
+          route: window.location.pathname,
+          ...(renderId === undefined ? {} : { renderId }),
+        });
       });
     }
 

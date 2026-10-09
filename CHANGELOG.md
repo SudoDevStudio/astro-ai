@@ -9,6 +9,18 @@ write entries for someone deciding whether to upgrade.
 
 ## [Unreleased]
 
+### Added
+
+- A **Perf** action on every selection. It shows whether the element is the
+  page's Largest Contentful Paint and where that time went, the layout shifts
+  and images inside it, how long each `.astro` frontmatter behind it took to
+  run, and every server-side `fetch` those frontmatters made, with the slowest
+  one marked. Repeated and one-after-another fetches are pointed out, and
+  **Ask AI to speed this up** sends the summary to the agent.
+- A `renderTiming` option, on by default, which turns off the server half of
+  that panel: the dev-server `fetch` wrapper and the timing calls added to each
+  frontmatter.
+
 ## [1.6.0] - 2026-09-26
 
 ### Added

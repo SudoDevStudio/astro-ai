@@ -51,12 +51,26 @@ export type InstrumentedSource = {
 
 export type InstrumentedAstroSource = InstrumentedSource;
 
+/**
+ * Statements to place at the start and end of an `.astro` frontmatter, given
+ * the project-relative file. Lets a caller observe each component's run
+ * without the resolver knowing what is observing it.
+ */
+export type FrontmatterHooks = (projectFile: string) => { enter: string; leave: string };
+
+/** Where hooks go: after the imports, and after the last statement. */
+type FrontmatterRange = { bodyStart: number; end: number };
+
 export class AstroResolver {
   readonly #projectRoot: string;
   readonly #capabilities: VisualCapabilityResolver;
   readonly #nodes = new Map<string, SourceNodeRecord>();
   readonly #nodesByFile = new Map<string, Set<string>>();
-  readonly #indexCache = new Map<string, { sourceHash: string; nodes: SourceNodeRecord[] }>();
+  readonly #indexCache = new Map<string, {
+    sourceHash: string;
+    nodes: SourceNodeRecord[];
+    frontmatter?: FrontmatterRange;
+  }>();
   readonly #skillFiles: string[];
   readonly #contentSources: ContentSourceRegistry;
   readonly #sourceLengths = new Map<string, number>();
@@ -90,9 +104,20 @@ export class AstroResolver {
     }
   }
 
-  instrumentFile(filePath: string, source: string): InstrumentedSource {
+  instrumentFile(
+    filePath: string,
+    source: string,
+    options: { frontmatterHooks?: FrontmatterHooks } = {},
+  ): InstrumentedSource {
     const nodes = this.indexFile(filePath, source);
     const output = new MagicString(source);
+
+    const frontmatter = this.#indexCache.get(this.toProjectFile(filePath))?.frontmatter;
+    if (options.frontmatterHooks !== undefined && frontmatter !== undefined) {
+      const hooks = options.frontmatterHooks(this.toProjectPath(filePath));
+      output.appendLeft(frontmatter.bodyStart, hooks.enter);
+      output.appendLeft(frontmatter.end, hooks.leave);
+    }
 
     for (const node of nodes) {
       if (!node.instrumentable) continue;
@@ -329,7 +354,14 @@ export class AstroResolver {
     assignSafeSiblings(siblingGroups, source);
 
     this.#nodesByFile.set(absoluteFile, new Set(nodes.map(({ nodeId }) => nodeId)));
-    this.#indexCache.set(absoluteFile, { sourceHash, nodes });
+    const frontmatter = sourceLanguage === 'astro'
+      ? frontmatterRange(parsed.declarationProgram)
+      : undefined;
+    this.#indexCache.set(absoluteFile, {
+      sourceHash,
+      nodes,
+      ...(frontmatter === undefined ? {} : { frontmatter }),
+    });
     this.#sourceLengths.set(absoluteFile, source.length);
     return nodes;
   }
@@ -472,6 +504,22 @@ function getSourceLanguage(filePath: string): SourceLanguage {
   if (extension === '.tsx' || extension === '.ts') return 'tsx';
   if (extension === '.jsx' || extension === '.js') return 'jsx';
   throw new Error(`Unsupported source file type: ${extension || '(none)'}.`);
+}
+
+/**
+ * A frontmatter with no statements has nothing to time. Imports are hoisted out
+ * of the component by the compiler, so the start hook goes after them, where
+ * the component's own code begins.
+ */
+function frontmatterRange(program: AstNode | undefined): FrontmatterRange | undefined {
+  const body = Array.isArray(program?.body) ? program.body as AstNode[] : [];
+  if (program?.end === undefined || body.length === 0) return undefined;
+  let bodyStart = program.start ?? 0;
+  for (const statement of body) {
+    if (statement.type === 'ImportDeclaration' && statement.end !== undefined) bodyStart = statement.end;
+  }
+  if (body.every((statement) => statement.type === 'ImportDeclaration')) return undefined;
+  return { bodyStart, end: program.end };
 }
 
 function parseSource(

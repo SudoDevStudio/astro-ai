@@ -1,4 +1,5 @@
 import type { ContentAttributeGroup } from './content-sources.js';
+import type { ServerRenderTiming } from './render-timing.js';
 import type { SelectionContext } from './selection-context.js';
 import type { SourceInsertionZone } from './selection-context.js';
 import type { DeterministicVisualCommand } from '../visual/commands.js';
@@ -20,6 +21,7 @@ export const CLIENT_EVENTS = {
   sessionClose: 'astro-ai:session-close',
   insertionZones: 'astro-ai:insertion-zones',
   siteRoutes: 'astro-ai:site-routes',
+  renderTiming: 'astro-ai:render-timing',
 } as const;
 
 /**
@@ -38,6 +40,7 @@ export const SERVER_EVENTS = {
   agentEvent: 'astro-ai:agent-event',
   insertionZones: 'astro-ai:insertion-zones-result',
   siteRoutes: 'astro-ai:site-routes-result',
+  renderTiming: 'astro-ai:render-timing-result',
 } as const;
 
 export type ClientReadyMessage = {
@@ -119,7 +122,7 @@ export type AgentSelectionReference = {
 };
 
 export type AgentExternalContext = {
-  kind: 'error' | 'audit' | 'seo';
+  kind: 'error' | 'audit' | 'seo' | 'performance';
   title: string;
   message: string;
   file?: string;
@@ -166,6 +169,18 @@ export type SiteRoutesResolvedMessage = {
   routes: Array<{ route: string; file: string; dynamic: boolean }>;
   /** Set when the page directory could not be read at all. */
   message?: string;
+};
+/**
+ * Asks for one page render's server timings. `renderId` comes from the page's
+ * `Server-Timing` header; without it the latest render of `route` answers.
+ */
+export type RenderTimingRequestMessage = { requestId: string; route: string; renderId?: string };
+
+export type RenderTimingResolvedMessage = {
+  requestId: string;
+  timing?: ServerRenderTiming;
+  /** `false` when `renderTiming: false` turned recording off. */
+  enabled: boolean;
 };
 export type InsertionZonesResolvedMessage = { requestId: string; zones: SourceInsertionZone[] };
 
@@ -221,6 +236,7 @@ export type ClientToServerMessages = {
   [CLIENT_EVENTS.sessionClose]: AgentSessionClosedMessage;
   [CLIENT_EVENTS.insertionZones]: InsertionZonesRequestMessage;
   [CLIENT_EVENTS.siteRoutes]: SiteRoutesRequestMessage;
+  [CLIENT_EVENTS.renderTiming]: RenderTimingRequestMessage;
 };
 
 export type ServerToClientMessages = {
@@ -232,4 +248,5 @@ export type ServerToClientMessages = {
   [SERVER_EVENTS.agentEvent]: AgentOperationEvent;
   [SERVER_EVENTS.insertionZones]: InsertionZonesResolvedMessage;
   [SERVER_EVENTS.siteRoutes]: SiteRoutesResolvedMessage;
+  [SERVER_EVENTS.renderTiming]: RenderTimingResolvedMessage;
 };

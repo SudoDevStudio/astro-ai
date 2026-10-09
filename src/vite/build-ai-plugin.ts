@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite';
 
-import type { AstroResolver } from '../resolver/astro-resolver.js';
+import type { AstroResolver, FrontmatterHooks } from '../resolver/astro-resolver.js';
 
 export const BUILD_AI_VITE_PLUGIN_NAME = 'astro-ai:dev' as const;
 
@@ -9,7 +9,10 @@ export const BUILD_AI_VITE_PLUGIN_NAME = 'astro-ai:dev' as const;
  * transforms. The ordered pre-hook keeps source ranges aligned with the files
  * that deterministic operations edit.
  */
-export function buildAIVitePlugin(resolver: AstroResolver): Plugin {
+export function buildAIVitePlugin(
+  resolver: AstroResolver,
+  options: { frontmatterHooks?: FrontmatterHooks } = {},
+): Plugin {
   return {
     name: BUILD_AI_VITE_PLUGIN_NAME,
     apply: 'serve',
@@ -21,7 +24,7 @@ export function buildAIVitePlugin(resolver: AstroResolver): Plugin {
         if (file === undefined || !resolver.ownsFile(file)) {
           return null;
         }
-        return resolver.instrumentFile(file, source);
+        return resolver.instrumentFile(file, source, options);
       },
     },
     configureServer(server) {

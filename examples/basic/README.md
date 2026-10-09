@@ -36,6 +36,30 @@ path where the editor re-establishes itself against a swapped page.
 | `/store/` | The trade counter as a `LocalBusiness`, with address, hours and coordinates. |
 | `/careers/field-engineer/` | A `JobPosting`, the type with the longest required list. |
 | `/seo/` | Share preview fixtures, one page per failure mode. |
+| `/perf/` | The **Perf** panel: slow, sequential, duplicated and failing server fetches, and an LCP image. |
+
+### Performance
+
+`/perf/` gives the **Perf** action something to rank. Its sections fetch stand-in
+APIs from `src/pages/api/perf/`, each with its own dev-only delay, through one
+shared helper in `src/lib/perf-api.ts`. Each call is still attributed to the
+component whose frontmatter made it, not to the helper. Select a section and
+choose **Perf**:
+
+| Select | The panel shows |
+| --- | --- |
+| The large image | It is the page's Largest Contentful Paint, split into TTFB, load and render delay. It is lazy-loaded and has no `fetchpriority`, and both are flagged. It has no size declared, so it also shifts the layout. |
+| Stock and pricing | `inventory` (≈450ms) then `prices` (≈260ms), awaited one after the other. The slower one is marked, and the panel suggests `Promise.all`. |
+| Reviews | Two fetches started together, so the section waits only for the slower one. `categories` is flagged because the page fetches it as well. |
+| The restock line | A fetch that answered 404 while the section quietly rendered its fallback. |
+| A thumbnail | A 1200px source drawn at 120px. |
+
+**Ask AI to speed this up** sends the whole summary to the agent, with the
+selected file attached.
+
+The numbers come from the dev server, so treat them as relative. A static
+build writes the endpoints out without delay, and has no server for the page
+to fetch, so `/perf/` there shows its fallbacks.
 
 ### The storefront
 

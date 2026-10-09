@@ -43,6 +43,8 @@ import {
   type InsertionZonesResolvedMessage,
   type SiteRoutesRequestMessage,
   type SiteRoutesResolvedMessage,
+  type RenderTimingRequestMessage,
+  type RenderTimingResolvedMessage,
   type ChatLayoutPreference,
   type DockSidePreference,
   type ServerReadyMessage,
@@ -53,6 +55,7 @@ import { PatchTransactionStore } from '../visual/patch-transactions.js';
 import { VisualCapabilityResolver } from '../visual/capability-resolver.js';
 import { buildAIVitePlugin } from '../vite/build-ai-plugin.js';
 import { contentSourceFromDomStamp, type DomStampOption } from './dom-stamp.js';
+import { RenderTimingRecorder, renderTimingHooks } from './render-timing.js';
 
 const TOOLBAR_APP_ID = 'astro-ai';
 const TOOLBAR_APP_ENTRYPOINT = new URL('../toolbar/app.js', import.meta.url);
@@ -100,6 +103,12 @@ export type BuildWithAIOptions = {
   dockSide?: DockSidePreference;
   /** Share preview settings, or `false` to hide it. */
   seo?: SeoPreviewOption;
+  /**
+   * Times each `.astro` frontmatter and every server-side `fetch` it makes, so
+   * selecting a section shows what it waited on. Dev server only; `false`
+   * leaves `fetch` and the transformed source untouched.
+   */
+  renderTiming?: boolean;
 };
 
 export { BUILD_AI_VITE_PLUGIN_NAME, buildAIVitePlugin } from '../vite/build-ai-plugin.js';
@@ -204,6 +213,7 @@ export default function buildWithAI(
   let viteServer: ViteDevServer | undefined;
   let agent: AgentFallback = new UnavailableAgentFallback();
   let seoPreview: ServerReadyMessage['seo'];
+  const renderTiming = options.renderTiming === false ? undefined : new RenderTimingRecorder();
   const chatLayout: ChatLayoutPreference | undefined =
     options.chatLayout === 'fixed' || options.chatLayout === 'floating' ? options.chatLayout : undefined;
   const dockSide: DockSidePreference | undefined =
@@ -342,7 +352,10 @@ export default function buildWithAI(
 
         updateConfig({
           vite: {
-            plugins: [buildAIVitePlugin(resolver)],
+            plugins: [buildAIVitePlugin(
+              resolver,
+              renderTiming === undefined ? {} : { frontmatterHooks: renderTimingHooks },
+            )],
             server: {
               fs: {
                 allow: [
@@ -362,6 +375,13 @@ export default function buildWithAI(
         const activeRequests = new Map<string, AbortController>();
         const recentAgentEvents = new Map<string, AgentOperationEvent>();
         const networkExposed = isExternallyBound(server?.config?.server?.host);
+        if (renderTiming !== undefined && server?.middlewares !== undefined) {
+          renderTiming.install();
+          // Astro adds its own request handlers after this hook, so the
+          // recorder opens each render before Astro starts it.
+          server.middlewares.use(renderTiming.middleware);
+          server?.httpServer?.once('close', () => renderTiming.uninstall());
+        }
         const activeAgent = networkExposed && options.allowNetworkAgent !== true
           ? new UnavailableAgentFallback('The AI agent bridge is disabled because Astro is listening beyond loopback. Set allowNetworkAgent: true only on a trusted network.')
           : agent;
@@ -451,6 +471,15 @@ export default function buildWithAI(
               message: error instanceof Error ? error.message : 'Could not read src/pages.',
             });
           }
+        });
+
+        toolbar.on<RenderTimingRequestMessage>(CLIENT_EVENTS.renderTiming, (message) => {
+          const timing = renderTiming?.find(message.renderId, message.route);
+          toolbar.send<RenderTimingResolvedMessage>(SERVER_EVENTS.renderTiming, {
+            requestId: message.requestId,
+            ...(timing === undefined ? {} : { timing }),
+            enabled: renderTiming !== undefined,
+          });
         });
 
         toolbar.on<ExecuteVisualCommandMessage>(CLIENT_EVENTS.execute, async (message) => {

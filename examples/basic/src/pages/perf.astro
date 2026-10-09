@@ -1,0 +1,91 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Callout from '../components/Callout.astro';
+import RestockNotice from '../components/RestockNotice.astro';
+import ReviewSummary from '../components/ReviewSummary.astro';
+import StockShelf from '../components/StockShelf.astro';
+import { getJson } from '../lib/perf-api';
+
+// The page fetches categories for its own heading, and ReviewSummary fetches
+// them again below.
+const categories = await getJson<string[]>('/api/perf/categories.json', Astro.url);
+---
+
+<Layout
+	title="Performance"
+	lede="Select a section and choose Perf to see what it waited on."
+	seo={{
+		description:
+			'Sections with slow, sequential, duplicated and failing server fetches, and an image that is the page’s largest paint, for the Perf panel to rank.',
+		image: '/og/card.png',
+		imageAlt: 'Abstract share card for the astro-ai example',
+	}}
+>
+	<Callout title="What to try" tone="accent">
+		Select the large image and choose Perf: it is the page's Largest
+		Contentful Paint, and it is lazy-loaded with no size declared, so the
+		panel flags both. Then select Stock and pricing to see two fetches
+		awaited one after the other, Reviews for a fetch the page makes twice, and
+		the restock line for a call that answers 404.
+	</Callout>
+
+	<!--
+		Deliberately unoptimised: lazy-loaded although it is the largest paint,
+		no width or height, so it shifts the content below when it arrives.
+	-->
+	<img class="hero" src="/og/card.png" alt="Abstract banner" loading="lazy" />
+
+	<p class="categories">
+		{categories === undefined ? 'Browse the catalog' : `Browse ${categories.join(' · ')}`}
+	</p>
+
+	<div class="grid">
+		<StockShelf />
+		<ReviewSummary />
+	</div>
+
+	<RestockNotice />
+
+	<section class="thumbs">
+		<h2>Thumbnails</h2>
+		<!-- A 1200px source drawn at 120px: the panel suggests a smaller one. -->
+		<img src="/og/card.png" alt="Thumbnail one" width="120" height="63" />
+		<img src="/og/undersized.png" alt="Thumbnail two" width="120" height="63" />
+	</section>
+</Layout>
+
+<style>
+	.hero {
+		border-radius: 10px;
+		display: block;
+		width: 100%;
+	}
+
+	.categories {
+		color: #c4b5fd;
+		margin: 0;
+	}
+
+	.grid {
+		display: grid;
+		gap: 1rem;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	}
+
+	.thumbs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		align-items: center;
+	}
+
+	.thumbs h2 {
+		font-size: 1.05rem;
+		margin: 0;
+		width: 100%;
+	}
+
+	.thumbs img {
+		border-radius: 6px;
+	}
+</style>

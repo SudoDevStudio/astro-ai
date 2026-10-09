@@ -1,0 +1,36 @@
+---
+import { getJson } from '../lib/perf-api';
+
+// Both calls start together, so this section waits only as long as the slower
+// one. `categories` is also fetched by the page, so the panel reports it as
+// fetched twice in one render.
+const [reviews, categories] = await Promise.all([
+	getJson<{ rating: number; count: number }>('/api/perf/reviews.json', Astro.url),
+	getJson<string[]>('/api/perf/categories.json', Astro.url),
+]);
+---
+
+<section class="panel">
+	<h2>Reviews</h2>
+	<p>
+		{reviews === undefined ? 'Reviews unavailable' : `Rated ${reviews.rating} from ${reviews.count} reviews`}
+	</p>
+	<p>{categories === undefined ? '' : `Across ${categories.join(', ').toLowerCase()}`}</p>
+</section>
+
+<style>
+	.panel {
+		border: 1px solid #343a46;
+		border-radius: 8px;
+		padding: 1rem 1.25rem;
+	}
+
+	h2 {
+		font-size: 1.05rem;
+		margin: 0 0 0.5rem;
+	}
+
+	p {
+		margin: 0.2rem 0;
+	}
+</style>

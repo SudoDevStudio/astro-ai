@@ -1,0 +1,18 @@
+---
+import { getJson } from '../lib/perf-api';
+
+// This endpoint does not exist, so the fetch answers 404. The section still
+// renders its fallback, which is exactly how a broken call goes unnoticed.
+const restock = await getJson<{ date: string }>('/api/perf/restock.json', Astro.url);
+---
+
+<p class="notice">
+	{restock === undefined ? 'Restock date not announced yet.' : `Back in stock on ${restock.date}.`}
+</p>
+
+<style>
+	.notice {
+		color: #aeb6c5;
+		margin: 0;
+	}
+</style>

@@ -9,6 +9,8 @@ write entries for someone deciding whether to upgrade.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-10
+
 ### Added
 
 - A **Perf** action on every selection. It shows whether the element is the
@@ -214,7 +216,8 @@ First stable release, and the first to publish its sources alongside `dist`.
 reconstructed here. See the [releases page][releases] for those tags.
 
 [releases]: https://github.com/SudoDevStudio/astro-ai/releases
-[Unreleased]: https://github.com/SudoDevStudio/astro-ai/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/SudoDevStudio/astro-ai/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.8.0
 [1.6.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.6.0
 [1.3.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.3.0
 [1.1.0]: https://github.com/SudoDevStudio/astro-ai/releases/tag/v1.1.0

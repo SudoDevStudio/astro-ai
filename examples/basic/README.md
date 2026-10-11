@@ -36,26 +36,33 @@ path where the editor re-establishes itself against a swapped page.
 | `/store/` | The trade counter as a `LocalBusiness`, with address, hours and coordinates. |
 | `/careers/field-engineer/` | A `JobPosting`, the type with the longest required list. |
 | `/seo/` | Share preview fixtures, one page per failure mode. |
-| `/perf/` | The **Perf** panel: slow, sequential, duplicated and failing server fetches, and an LCP image. |
+| `/perf/` | Section timing outlines: slow, sequential, duplicated and failing server fetches, and an LCP image. |
 
 ### Performance
 
-`/perf/` gives the **Perf** action something to rank. Its sections fetch stand-in
-APIs from `src/pages/api/perf/`, each with its own dev-only delay, through one
-shared helper in `src/lib/perf-api.ts`. Each call is still attributed to the
-component whose frontmatter made it, not to the helper. Select a section and
-choose **Perf**:
+`/perf/` gives the timing overlay something to rank. Its sections fetch
+stand-in APIs from `src/pages/api/perf/`, each with its own dev-only delay,
+through one shared helper in `src/lib/perf-api.ts`. Each call is still
+attributed to the component whose frontmatter made it, not to the helper.
 
-| Select | The panel shows |
+Open the app and every section that did server work is outlined — green, amber
+from 200ms, red from 500ms — with a card naming the component, its render time,
+and each call it made: URL, status, size and duration, slowest in red.
+
+| Section | What its card shows |
 | --- | --- |
-| The large image | It is the page's Largest Contentful Paint, split into TTFB, load and render delay. It is lazy-loaded and has no `fetchpriority`, and both are flagged. It has no size declared, so it also shifts the layout. |
-| Stock and pricing | `inventory` (≈450ms) then `prices` (≈260ms), awaited one after the other. The slower one is marked, and the panel suggests `Promise.all`. |
-| Reviews | Two fetches started together, so the section waits only for the slower one. `categories` is flagged because the page fetches it as well. |
-| The restock line | A fetch that answered 404 while the section quietly rendered its fallback. |
-| A thumbnail | A 1200px source drawn at 120px. |
+| Stock and pricing | Red. `inventory` (≈450ms) then `prices` (≈260ms), awaited one after the other; the finding suggests `Promise.all`. |
+| Reviews | Two calls started together, so it waits only for the slower one. `categories` is flagged because the page fetches it as well. |
+| The restock line | A call that answered 404 while the section quietly rendered its fallback. |
+| The large image | A dashed outline: it is the page's Largest Contentful Paint. Lazy-loaded with no `fetchpriority`, and both are flagged. |
 
-**Ask AI to speed this up** sends the whole summary to the agent, with the
-selected file attached.
+The page's own render — total time, its calls, and TTFB, FCP, LCP, CLS and INP
+— sits in a card in the corner. A ⚠ count in a card's header means it has
+findings; click the header to read them. Wherever something needs improving
+there is an **Ask AI** button. On this page the corner card has one, because the
+render takes over 500ms; it opens the chat with the problems already in the
+textbox, ready to send. A fast page such as `/content/` shows no button. The
+**Perf** button in the chat window hides the outlines.
 
 The numbers come from the dev server, so treat them as relative. A static
 build writes the endpoints out without delay, and has no server for the page

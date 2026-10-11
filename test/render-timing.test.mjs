@@ -13,7 +13,7 @@ import {
   renderTimingHooks,
 } from '../dist/integration/render-timing.js';
 import { AstroResolver } from '../dist/resolver/astro-resolver.js';
-import { fetchHints, sectionTiming } from '../dist/toolbar/performance.js';
+import { fetchHints, locateSections } from '../dist/toolbar/performance.js';
 
 async function resolverFor(t, name, source) {
   const directory = await mkdtemp(join(tmpdir(), 'astro-ai-timing-'));
@@ -117,6 +117,9 @@ test('attributes each fetch to the request and the component that made it', asyn
       ['/slow', 'src/components/Grid.astro', 200],
     ],
   );
+  for (const entry of render.fetches) {
+    assert.equal(render.components[entry.componentIndex].file, entry.component, 'each fetch names its instance');
+  }
   const slow = render.fetches.find(({ url }) => url.endsWith('/slow'));
   assert.ok(slow.durationMs >= 30, `slow fetch took ${slow.durationMs}ms`);
   assert.equal(slow.bytes, 2);
@@ -144,17 +147,6 @@ test('passes assets and non-page requests straight through', () => {
   assert.equal(recorder.find(undefined, '/'), undefined);
 });
 
-function selection(file, parents = [], componentName) {
-  return {
-    selectedNode: {
-      nodeId: 'n',
-      source: { file, start: { line: 3, column: 1, offset: 0 }, end: { line: 3, column: 9, offset: 8 } },
-      ...(componentName === undefined ? {} : { componentName }),
-    },
-    parentComponents: parents.map((parent) => ({ name: parent, source: { file: parent, start: {}, end: {} } })),
-  };
-}
-
 const render = {
   id: 'r',
   route: '/',
@@ -166,25 +158,54 @@ const render = {
     { file: 'src/components/Header.astro', startMs: 25, durationMs: 15 },
   ],
   fetches: [
-    { url: '/api/products', method: 'GET', component: 'src/components/ProductGrid.astro', startMs: 26, durationMs: 120, status: 200 },
-    { url: '/api/prices', method: 'GET', component: 'src/components/ProductGrid.astro', startMs: 147, durationMs: 100, status: 200 },
-    { url: '/api/nav', method: 'GET', component: 'src/components/Header.astro', startMs: 26, durationMs: 10, status: 200 },
-    { url: '/api/nav', method: 'GET', component: 'src/pages/index.astro', startMs: 2, durationMs: 9, status: 200 },
+    { url: '/api/products', method: 'GET', component: 'src/components/ProductGrid.astro', componentIndex: 1, startMs: 26, durationMs: 120, status: 200 },
+    { url: '/api/prices', method: 'GET', component: 'src/components/ProductGrid.astro', componentIndex: 1, startMs: 147, durationMs: 100, status: 200 },
+    { url: '/api/nav', method: 'GET', component: 'src/components/Header.astro', componentIndex: 2, startMs: 26, durationMs: 10, status: 200 },
+    { url: '/api/nav', method: 'GET', component: 'src/pages/index.astro', componentIndex: 0, startMs: 2, durationMs: 9, status: 200 },
   ],
 };
 
-test('scopes a render to the selected element and the component it names', () => {
-  const usage = sectionTiming(render, selection('src/pages/index.astro', [], 'ProductGrid'));
-  assert.deepEqual(usage.components.map(({ file }) => file), [
-    'src/components/ProductGrid.astro',
-    'src/pages/index.astro',
-  ]);
-  assert.deepEqual(usage.fetches.map(({ url }) => url), ['/api/nav', '/api/products', '/api/prices']);
-  assert.deepEqual(usage.slowestOnPage, []);
+test('pairs each component instance with the elements it rendered', async () => {
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM(`<main data-astro-ai-source="src/pages/index.astro:5">
+    <section data-astro-ai-source="src/components/ProductGrid.astro:9"><h2 data-astro-ai-source="src/components/ProductGrid.astro:10">Grid</h2></section>
+    <header data-astro-ai-source="src/components/Header.astro:3">Nav</header>
+    <article data-astro-ai-source="src/components/Card.astro:4">One</article>
+    <article data-astro-ai-source="src/components/Card.astro:4">Two</article>
+    <footer data-astro-ai-source="src/components/Footer.astro:2">Quiet</footer>
+  </main>`);
+  const timing = {
+    ...render,
+    components: [
+      ...render.components,
+      { file: 'src/components/Card.astro', startMs: 30, durationMs: 40 },
+      { file: 'src/components/Card.astro', startMs: 31, durationMs: 90 },
+      { file: 'src/components/Footer.astro', startMs: 30, durationMs: 1 },
+    ],
+    fetches: [
+      ...render.fetches,
+      { url: '/api/card/2', method: 'GET', component: 'src/components/Card.astro', componentIndex: 4, startMs: 32, durationMs: 85, status: 200 },
+    ],
+  };
+  const layout = locateSections(timing, dom.window.document);
 
-  const quiet = sectionTiming({ ...render, fetches: render.fetches.slice(0, 2) }, selection('src/components/Footer.astro'));
-  assert.deepEqual(quiet.fetches, []);
-  assert.deepEqual(quiet.slowestOnPage.map(({ url }) => url), ['/api/products', '/api/prices']);
+  assert.deepEqual(layout.pages.map(({ file }) => file), ['src/pages/index.astro']);
+  assert.deepEqual(layout.pages[0].fetches.map(({ url }) => url), ['/api/nav']);
+  // Footer ran for 1ms and fetched nothing, so it is not worth a border.
+  assert.deepEqual(
+    layout.sections.map(({ file, roots }) => [file, roots.map((root) => root.tagName.toLowerCase())]),
+    [
+      ['src/components/ProductGrid.astro', ['section']],
+      ['src/components/Header.astro', ['header']],
+      ['src/components/Card.astro', ['article']],
+      ['src/components/Card.astro', ['article']],
+    ],
+  );
+  const [first, second] = layout.sections.filter(({ file }) => file === 'src/components/Card.astro');
+  assert.equal(first.roots[0].textContent, 'One');
+  assert.deepEqual(first.fetches, []);
+  assert.equal(second.roots[0].textContent, 'Two');
+  assert.deepEqual(second.fetches.map(({ url }) => url), ['/api/card/2']);
 });
 
 test('points out sequential and duplicated fetches', () => {
@@ -200,16 +221,19 @@ test('points out sequential and duplicated fetches', () => {
   assert.match(fetchHints(failing, failing)[0], /answered 500/);
 });
 
-test('the Perf panel measures the selection, marks the slowest fetch, and hands it to the agent', async (t) => {
+test('outlines each section with its time and calls, and hands one to the agent', async (t) => {
   const { JSDOM } = await import('jsdom');
-  const dom = new JSDOM('<!doctype html><body></body>', { url: 'http://localhost/' });
+  const dom = new JSDOM(`<!doctype html><body><main data-astro-ai-source="src/pages/index.astro:5">
+    <section data-astro-ai-source="src/components/ProductGrid.astro:9">Grid</section>
+    <header data-astro-ai-source="src/components/Header.astro:3">Nav</header>
+  </main></body>`, { url: 'http://localhost/' });
   const globals = {
     window: dom.window,
     document: dom.window.document,
     Element: dom.window.Element,
     HTMLElement: dom.window.HTMLElement,
+    HTMLImageElement: dom.window.HTMLImageElement,
     Node: dom.window.Node,
-    DOMRect: dom.window.DOMRect,
     requestAnimationFrame: (callback) => dom.window.setTimeout(() => callback(0), 0),
     cancelAnimationFrame: (id) => dom.window.clearTimeout(id),
   };
@@ -218,69 +242,93 @@ test('the Perf panel measures the selection, marks the slowest fetch, and hands 
     previous.set(key, globalThis[key]);
     globalThis[key] = value;
   }
-  const { ContextualActionBar } = await import('../dist/toolbar/contextual-actions.js');
+  // jsdom has no layout, so give the sections somewhere to be.
+  for (const [selector, top] of [['section', 100], ['header', 400]]) {
+    dom.window.document.querySelector(selector).getBoundingClientRect = () => (
+      { left: 20, top, right: 420, bottom: top + 120, width: 400, height: 120 }
+    );
+  }
+  const { PerformanceOverlay } = await import('../dist/toolbar/perf-overlay.js');
   const fixes = [];
-  const context = {
-    ...selection('src/pages/index.astro', [], 'ProductGrid'),
-    route: '/',
-    capabilities: {
-      editableText: false,
-      movable: false,
-      reorderable: false,
-      removable: false,
-      editableProps: [],
-      allowedParentSlots: [],
-      sourceKind: 'component',
-      dataProvenance: { kind: 'unknown', description: 'Component.', readOnly: true },
-      reorderTargets: {},
-    },
-    contentOrigins: [],
-    relevantFiles: [],
-    skillFiles: [],
-  };
-  const bar = new ContextualActionBar({
-    onCommand() {},
-    onAskAI() {},
-    onClear() {},
-    async onPerformance(measured) {
-      return {
-        element: {
-          lcp: { relation: 'contains', timeMs: 3100, breakdown: { ttfb: 300, loadDelay: 900, loadDuration: 1200, renderDelay: 700 } },
-          shifts: { count: 0, score: 0 },
-          images: [],
-        },
-        page: { ttfbMs: 300, lcpMs: 3100, cls: 0, clientFetches: 0 },
-        section: sectionTiming(render, measured),
-      };
-    },
-    onPerformanceFix(external) { fixes.push(external); },
-  });
+  const overlay = new PerformanceOverlay({ onFix: (context, instruction) => fixes.push({ context, instruction }) });
   t.after(() => {
-    bar.destroy();
+    overlay.destroy();
     for (const [key, value] of previous) {
       if (value === undefined) delete globalThis[key];
       else globalThis[key] = value;
     }
   });
+  const monitor = {
+    lcpElement: () => undefined,
+    element: () => ({ shifts: { count: 0, score: 0 }, images: [] }),
+    page: () => ({ ttfbMs: 40, lcpMs: 900, cls: 0, clientFetches: 0 }),
+  };
 
-  const target = dom.window.document.createElement('section');
-  dom.window.document.body.append(target);
-  bar.show(context, target);
-  const root = dom.window.document.querySelector('[data-astro-ai-ui="actions"]').shadowRoot;
-  root.querySelector('[data-action="perf"]').click();
-  assert.match(root.querySelector('.perf-detail').textContent, /Measuring/);
-  await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+  overlay.render(render, monitor);
+  const root = dom.window.document.querySelector('[data-astro-ai-ui="perf"]').shadowRoot;
+  const boxes = [...root.querySelectorAll('.section-box')];
+  assert.deepEqual(boxes.map((box) => box.dataset.tone), ['warn', 'fast'], 'ProductGrid at 250ms is amber, Header at 15ms green');
+  assert.equal(boxes[0].style.top, '100px');
+  assert.equal(boxes[0].style.width, '400px');
 
-  const panel = root.querySelector('.perf-detail');
-  assert.match(panel.textContent, /The page’s Largest Contentful Paint is inside this element/);
-  assert.match(panel.textContent, /3 fetches from this section/);
-  const slowest = [...panel.querySelectorAll('.perf-row[data-slowest="true"] .label')].map(({ textContent }) => textContent);
-  assert.ok(slowest.some((label) => label.startsWith('/api/products')), slowest.join(' | '));
-  assert.match(panel.querySelector('.perf-hints').textContent, /ProductGrid awaits 2 fetches one after another/);
+  const grid = [...root.querySelectorAll('.card')].find((card) => card.textContent.includes('ProductGrid.astro'));
+  assert.match(grid.querySelector('.card-time').textContent, /250ms/);
+  assert.match(grid.querySelector('.card-summary').textContent, /2 fetches/);
+  const rows = [...grid.querySelectorAll('.fetch')].map((row) => [
+    row.querySelector('.url').textContent,
+    row.querySelector('.meta').textContent,
+    row.querySelector('.time').textContent,
+    row.dataset.slowest === 'true',
+  ]);
+  assert.deepEqual(rows, [
+    ['/api/products', '200', '120ms', true],
+    ['/api/prices', '200', '100ms', false],
+  ]);
+  assert.match(grid.querySelector('.hints').textContent, /ProductGrid awaits 2 fetches one after another/);
 
-  [...panel.querySelectorAll('button')].find(({ textContent }) => textContent === 'Ask AI to speed this up').click();
+  const page = root.querySelector('.page-card');
+  assert.match(page.textContent, /300ms/);
+  assert.match(page.textContent, /4 server fetches/);
+  assert.match(page.querySelector('.card-body').textContent, /TTFB/);
+
+  // Findings and the agent action wait behind the header; the calls do not.
+  assert.equal(grid.dataset.expanded, 'false');
+  assert.match(grid.querySelector('.hint-count').textContent, /⚠ 1/);
+  grid.querySelector('.card-header').click();
+  assert.equal(grid.dataset.expanded, 'true');
+
+  grid.querySelector('.fix').click();
   assert.equal(fixes.length, 1);
-  assert.equal(fixes[0].kind, 'performance');
-  assert.equal(fixes[0].file, 'src/pages/index.astro');
-  assert.match(fixes[0].message, /GET \/api\/products → 200 in 120ms/);
+  assert.equal(fixes[0].context.kind, 'performance');
+  assert.equal(fixes[0].context.file, 'src/components/ProductGrid.astro');
+  assert.match(fixes[0].context.message, /GET \/api\/products → 200 in 120ms/);
+  assert.match(fixes[0].instruction, /^Improve the performance of src\/components\/ProductGrid.astro:/);
+  assert.match(fixes[0].instruction, /- Its frontmatter takes 250ms/);
+
+  overlay.clear();
+  assert.equal(root.querySelectorAll('.card').length, 0);
+
+  // A healthy page offers no action at all.
+  const quiet = { ...render, totalMs: 120, fetches: render.fetches.filter(({ url }) => url !== '/api/nav') };
+  overlay.render(quiet, monitor);
+  assert.equal(root.querySelector('.page-card .fix'), null);
+  assert.equal(root.querySelector('.page-card .vital[data-rating="poor"]'), null);
+  // Header now ran for 15ms and fetched nothing: nothing to ask about.
+  const header = [...root.querySelectorAll('.card')].find((card) => card.textContent.includes('Header.astro'));
+  assert.equal(header.querySelector('.fix'), null);
+
+  // A poor vital puts the action beside the vitals, with the problem in words.
+  overlay.render(quiet, { ...monitor, page: () => ({ ttfbMs: 90, fcpMs: 228, lcpMs: 228, cls: 0.501, inpMs: 112, clientFetches: 0 }) });
+  const pageCard = root.querySelector('.page-card');
+  assert.equal(pageCard.querySelector('.vital[data-rating="poor"] span').textContent, 'CLS');
+  const ask = pageCard.querySelector('.card-body .fix');
+  assert.ok(ask, 'Ask AI sits in the always-visible body');
+  ask.click();
+  const pageFix = fixes.at(-1);
+  assert.equal(pageFix.instruction, [
+    'Improve the performance of the page /:',
+    '- CLS is 0.501, poor (good is 0.1 or less).',
+    'Keep what the page renders the same.',
+  ].join('\n'));
+  assert.match(pageFix.context.message, /Vitals: TTFB 90ms, FCP 228ms, LCP 228ms, CLS 0.501, INP 112ms/);
 });

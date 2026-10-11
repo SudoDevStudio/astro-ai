@@ -17,6 +17,8 @@ export const EDITOR_LAYERS = {
   selectionOutline: 2147483636,
   hoverOutline: 2147483635,
   selectionConnector: 2147483634,
+  /** Section timing borders and cards: under every selection affordance. */
+  perfOverlay: 2147483633,
 } as const;
 
 /** How many chat windows can be stacked with a distinct z-index. */

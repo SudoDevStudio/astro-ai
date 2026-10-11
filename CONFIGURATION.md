@@ -407,24 +407,31 @@ card fewer.
 
 ## `renderTiming`
 
-Select an element and choose **Perf** to see what it costs:
+While the app is open, every section of the page that did server work is
+outlined, coloured by how long its `.astro` frontmatter ran — green, amber from
+200ms, red from 500ms. A card on each outline names the component and its time,
+and lists every server-side `fetch` it made: URL, status, size and duration on
+the section's own time axis, slowest in red, failures marked. A component used
+several times gets an outline per instance, each with its own calls.
 
-- **This element**: whether it is (or contains) the Largest Contentful Paint,
-  with the time split into TTFB, load delay, load and render delay; layout
-  shifts it caused; its images with load time, size, and whether they are
-  lazy; and its slowest interaction.
-- **Server render**: how long each `.astro` frontmatter behind it ran — the
-  file it is written in, every component above it, and the component itself
-  when you selected a component — and every server-side `fetch` those
-  frontmatters made, with status, size and duration, the slowest marked.
-- **Page**: TTFB, FCP, LCP, CLS and INP for scale.
+The Largest Contentful Paint element gets a dashed outline of its own, with
+the time split into TTFB, load delay, load and render delay, unless a section
+already contains it. The route's own render — total time, its calls, and TTFB,
+FCP, LCP, CLS and INP — sits in a card in the corner.
 
-It also points out patterns worth a look: the same URL fetched more than once
-in a render, a component that awaits fetches one after another, a lazy or
-low-priority LCP image, an image much larger than it is shown. **Ask AI to
-speed this up** hands the whole summary to the agent.
+Cards point out patterns worth a look: the same URL fetched more than once in a
+render, a component that awaits fetches one after another, a failed call, a
+lazy or low-priority LCP image, an image much larger than it is shown. A ⚠
+count in a card's header means it has some; click the header to read them.
 
-The browser half needs nothing. The server half wraps `fetch` on the dev
+**Ask AI** appears only where something needs improving: a section that ran for
+200ms or more or has findings, an LCP over 2.5s, or — on the page card, where
+the button sits beside the vitals — any vital outside its good range, a render
+of 500ms or more, or a slow section. It opens the chat with the problems listed
+in the textbox, for you to edit and send, and the full measurements attached.
+The **Perf** button in the chat window hides and shows the outlines.
+
+The browser measurements need nothing. The server half wraps `fetch` on the dev
 server and adds one call at the start and end of each `.astro` frontmatter, so
 a call can be traced back to the component that made it, however many helpers
 it passes through. Turn that off with:
@@ -436,7 +443,8 @@ buildWithAI({ renderTiming: false });
 The numbers come from the dev server, which serves modules unbundled and
 caches nothing. Use them to compare sections and fetches against each other,
 not as a forecast of production. Fetches made by islands in the browser are
-counted on the page, not attributed to a section.
+counted on the page, not attributed to a section, and a section that ran for
+under 5ms without fetching anything is not outlined.
 
 ## Recipes
 

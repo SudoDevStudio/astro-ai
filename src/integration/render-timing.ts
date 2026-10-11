@@ -37,6 +37,7 @@ type RenderStore = {
   render: ServerRenderTiming;
   origin: number;
   component?: ServerComponentTiming;
+  componentIndex?: number;
 };
 
 type ComponentHooks = {
@@ -147,10 +148,10 @@ export class RenderTimingRecorder {
       file,
       startMs: round(performance.now() - store.origin),
     };
-    store.render.components.push(component);
+    const componentIndex = store.render.components.push(component) - 1;
     // A new store object, so a sibling that resumes later keeps its own
     // component rather than reading this one through a shared reference.
-    this.#storage.enterWith({ render: store.render, origin: store.origin, component });
+    this.#storage.enterWith({ render: store.render, origin: store.origin, component, componentIndex });
   }
 
   #leave(file: string): void {
@@ -173,7 +174,9 @@ export class RenderTimingRecorder {
     const entry: ServerRenderTiming['fetches'][number] = {
       url: requestUrl(input),
       method: (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase(),
-      ...(store.component === undefined ? {} : { component: store.component.file }),
+      ...(store.component === undefined
+        ? {}
+        : { component: store.component.file, componentIndex: store.componentIndex }),
       startMs: round(started - store.origin),
     };
     store.render.fetches.push(entry);

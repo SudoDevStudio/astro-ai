@@ -1,7 +1,7 @@
 import type { ContentOrigin } from '../shared/content-sources.js';
 import type { SelectionContext } from '../shared/selection-context.js';
 
-export type ContextualActionId = 'click' | 'edit' | 'props' | 'move' | 'remove' | 'ask-ai' | 'source' | 'perf';
+export type ContextualActionId = 'click' | 'edit' | 'props' | 'move' | 'remove' | 'ask-ai' | 'source';
 
 export type ContextualAction = {
   id: ContextualActionId;
@@ -36,11 +36,7 @@ export function contextualActions(context: SelectionContext): ContextualAction[]
     actions.push({ id: 'move', label: 'Move' });
   }
   if (context.capabilities.removable) actions.push({ id: 'remove', label: 'Remove' });
-  actions.push(
-    { id: 'ask-ai', label: 'Ask AI' },
-    { id: 'source', label: 'Source' },
-    { id: 'perf', label: 'Perf' },
-  );
+  actions.push({ id: 'ask-ai', label: 'Ask AI' }, { id: 'source', label: 'Source' });
   return actions;
 }
 

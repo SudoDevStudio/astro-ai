@@ -13,15 +13,20 @@ write entries for someone deciding whether to upgrade.
 
 ### Added
 
-- A **Perf** action on every selection. It shows whether the element is the
-  page's Largest Contentful Paint and where that time went, the layout shifts
-  and images inside it, how long each `.astro` frontmatter behind it took to
-  run, and every server-side `fetch` those frontmatters made, with the slowest
-  one marked. Repeated and one-after-another fetches are pointed out, and
-  **Ask AI to speed this up** sends the summary to the agent.
-- A `renderTiming` option, on by default, which turns off the server half of
-  that panel: the dev-server `fetch` wrapper and the timing calls added to each
-  frontmatter.
+- Section timing outlines. While the app is open, every section of the page
+  that did server work is outlined and coloured by how long its frontmatter
+  ran, with a card listing each server-side `fetch` it made — URL, status,
+  size and duration, slowest marked. The Largest Contentful Paint element gets
+  its own outline with its time broken down, and the page's render and Core
+  Web Vitals sit in a corner card. Repeated, one-after-another and failed
+  fetches are pointed out, and vitals are coloured by their Core Web Vitals
+  rating. Wherever something needs improving, an **Ask AI** button opens the
+  chat with the problems listed in the textbox, ready to edit and send, and the
+  measurements attached. A **Perf** button in the chat window hides the
+  outlines.
+- A `renderTiming` option, on by default. `false` leaves `fetch` and the
+  transformed source untouched, and the outlines fall back to browser
+  measurements only.
 
 ## [1.6.0] - 2026-09-26
 

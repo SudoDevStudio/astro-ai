@@ -1,10 +1,10 @@
 ---
 import { getJson } from '../lib/perf-api';
 
-// Two independent calls awaited one after the other: the second waits for the
-// first for no reason. The Perf panel points this out and marks the slower one.
-const inventory = await getJson<{ inStock: number; warehouses: number }>('/api/perf/inventory.json', Astro.url);
-const prices = await getJson<{ currency: string; from: string }>('/api/perf/prices.json', Astro.url);
+const [inventory, prices] = await Promise.all([
+	getJson<{ inStock: number; warehouses: number }>('/api/perf/inventory.json', Astro.url),
+	getJson<{ currency: string; from: string }>('/api/perf/prices.json', Astro.url),
+]);
 ---
 
 <section class="panel">

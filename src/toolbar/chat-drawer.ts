@@ -38,6 +38,8 @@ export type ChatDrawerCallbacks = {
   onMinimizedChange?(minimized: boolean): void;
   /** Opens the share preview for the current route. */
   onOpenSeo?(): void;
+  /** Shows or hides the section timing overlay on the page. */
+  onTogglePerf?(): void;
   /** Switches every window between floating and docked. */
   onToggleLayout?(): void;
 };
@@ -144,6 +146,7 @@ export class ChatDrawer {
   readonly #redo: HTMLButtonElement;
   readonly #collapse: HTMLButtonElement;
   readonly #seo: HTMLButtonElement;
+  readonly #perf: HTMLButtonElement;
   readonly #layoutToggle: HTMLButtonElement;
   readonly #connector: SVGSVGElement;
   readonly #connectorPath: SVGPathElement;
@@ -280,12 +283,22 @@ export class ChatDrawer {
     seo.classList.add('seo-button');
     seo.hidden = callbacks.onOpenSeo === undefined;
     this.#seo = seo;
+    const perf = toolButton(
+      '⏱',
+      'Perf',
+      'Outline each section with its render time and the calls it made',
+      () => this.#callbacks.onTogglePerf?.(),
+    );
+    perf.classList.add('perf-button');
+    perf.hidden = callbacks.onTogglePerf === undefined;
+    perf.setAttribute('aria-pressed', 'false');
+    this.#perf = perf;
     this.#layoutToggle = toolButton('⇥', 'Dock', 'Dock the chat into a side column', () =>
       this.#callbacks.onToggleLayout?.());
     this.#layoutToggle.classList.add('layout-button');
     this.#layoutToggle.hidden = callbacks.onToggleLayout === undefined;
     this.#syncLayoutToggle();
-    tools.append(seo, this.#layoutToggle);
+    tools.append(seo, perf, this.#layoutToggle);
     this.#toolbar.append(historyActions, this.#notice, tools);
 
     this.#body = element('div', 'drawer-body');
@@ -399,6 +412,11 @@ export class ChatDrawer {
 
   get layout(): ChatLayout {
     return this.#layout;
+  }
+
+  /** Reflects whether the section timing overlay is showing. */
+  setPerfActive(active: boolean): void {
+    this.#perf.setAttribute('aria-pressed', String(active));
   }
 
   /** Hides the share preview control when the project switched the feature off. */
@@ -645,7 +663,12 @@ export class ChatDrawer {
     this.open();
   }
 
-  openWithExternalContext(context: AgentExternalContext): void {
+  /**
+   * Attaches outside context and prefills the composer. `instruction`, when
+   * given, replaces the stock prompt for the context's kind, so a caller that
+   * knows what is wrong can say so in words the user reviews before sending.
+   */
+  openWithExternalContext(context: AgentExternalContext, instruction?: string): void {
     this.#currentSelections = [];
     this.#currentSelectionElements = [];
     this.#attachments = [];
@@ -655,13 +678,13 @@ export class ChatDrawer {
     this.#locked = false;
     this.setSelectionAnchor();
     this.open();
-    this.#input.value = context.kind === 'error'
+    this.#input.value = instruction ?? (context.kind === 'error'
       ? 'Fix this development error.'
       : context.kind === 'seo'
         ? 'Fix these share preview issues in the head metadata for this route.'
         : context.kind === 'performance'
           ? 'Make this section load faster. Keep its output identical.'
-          : 'Fix this audit issue.';
+          : 'Fix this audit issue.');
     this.#syncComposer();
   }
 
@@ -1539,6 +1562,7 @@ export function createChatDrawerStyle(): HTMLStyleElement {
     .tool-button { align-items: center; border-radius: 7px; display: flex; flex: 0 0 auto; font-size: 11px; font-weight: 700; gap: 5px; padding: 5px 9px; white-space: nowrap; }
     .tool-icon { font-size: 12px; line-height: 1; }
     .seo-button { background: #15803d; border-color: #22c55e; color: #f0fdf4; }
+    .perf-button[aria-pressed='true'] { background: #713f12; border-color: #fbbf24; color: #fef3c7; }
     .seo-button:hover:not(:disabled) { background: #16a34a; border-color: #4ade80; }
     .layout-button { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
     .layout-button:hover:not(:disabled) { background: #1d4ed8; border-color: #60a5fa; }

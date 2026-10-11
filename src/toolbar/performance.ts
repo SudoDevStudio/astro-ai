@@ -1,4 +1,3 @@
-import type { SelectionContext } from '../shared/selection-context.js';
 import {
   RENDER_TIMING_METRIC,
   type ServerComponentTiming,
@@ -92,6 +91,12 @@ export class PagePerformanceMonitor {
       const event = entry as EventTimingEntry;
       if ((event.interactionId ?? 0) > 0) this.#events.push(event);
     }, { durationThreshold: 16 });
+  }
+
+  /** The element the browser picked as the Largest Contentful Paint. */
+  lcpElement(): Element | undefined {
+    const element = this.#lcp?.element;
+    return element == null || !element.isConnected ? undefined : element;
   }
 
   /** The id the dev server put in `Server-Timing` for this document. */
@@ -225,50 +230,96 @@ function resourceEntries(): PerformanceResourceTiming[] {
   return performance.getEntriesByType('resource') as PerformanceResourceTiming[];
 }
 
-/**
- * The part of a server render that belongs to a selection.
- *
- * An element is rendered by the file it is written in and runs inside every
- * component above it, so those files' frontmatter is what it waited on. A
- * selected component usage additionally owns the component's own file, which
- * the selection names only by its component name.
- */
-export type SectionTiming = {
-  components: ServerComponentTiming[];
+export const SOURCE_ATTRIBUTE = 'data-astro-ai-source';
+
+/** Below this, a section with no fetches is not worth an outline. */
+export const MIN_SECTION_MS = 5;
+
+/** One rendered instance of a component, with the DOM it produced. */
+export type PageSection = {
+  file: string;
+  /** Index into the render's `components`. */
+  index: number;
+  timing: ServerComponentTiming;
   fetches: ServerFetchTiming[];
-  /** The page's slowest fetches, when the section made none of its own. */
-  slowestOnPage: ServerFetchTiming[];
-  totalMs?: number;
-  hints: string[];
+  roots: Element[];
 };
 
-export function sectionTiming(timing: ServerRenderTiming, context: SelectionContext): SectionTiming {
-  const files = new Set<string>([context.selectedNode.source.file]);
-  for (const parent of context.parentComponents) {
-    if (parent.source !== undefined) files.add(parent.source.file);
-  }
-  const componentName = context.selectedNode.componentName;
-  if (componentName !== undefined) {
-    for (const { file } of timing.components) {
-      if (basename(file) === componentName) files.add(file);
-    }
-  }
-  const components = timing.components
-    .filter(({ file }) => files.has(file))
-    .sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0));
-  const fetches = timing.fetches
-    .filter(({ component }) => component !== undefined && files.has(component))
+export type SectionLayout = {
+  sections: PageSection[];
+  /**
+   * Route files. Their markup wraps every other section, so they are reported
+   * in a page summary instead of drawing an outline around everything.
+   */
+  pages: Array<Omit<PageSection, 'roots'>>;
+};
+
+/**
+ * Pairs each timed component instance with the elements it rendered.
+ *
+ * An element belongs to the file named in its source attribute, and is a root
+ * of that file's output when no instrumented ancestor comes from the same file.
+ * Instances start in document order, so when a file's roots divide evenly
+ * among its instances, the nth group of roots is the nth instance. When they
+ * do not — a conditional root, a component that rendered nothing — the roots
+ * are paired one to one for as far as both lists go.
+ */
+export function locateSections(timing: ServerRenderTiming, root: ParentNode): SectionLayout {
+  const instances = new Map<string, number[]>();
+  timing.components.forEach(({ file }, index) => {
+    instances.set(file, [...(instances.get(file) ?? []), index]);
+  });
+  const fetchesFor = (index: number): ServerFetchTiming[] => timing.fetches
+    .filter(({ componentIndex }) => componentIndex === index)
     .sort((left, right) => left.startMs - right.startMs);
-  const slowestOnPage = fetches.length > 0
-    ? []
-    : [...timing.fetches].sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0)).slice(0, 3);
-  return {
-    components,
-    fetches,
-    slowestOnPage,
-    ...(timing.totalMs === undefined ? {} : { totalMs: timing.totalMs }),
-    hints: fetchHints(fetches, timing.fetches),
-  };
+  const worthShowing = (index: number): boolean => (
+    (timing.components[index]?.durationMs ?? 0) >= MIN_SECTION_MS || fetchesFor(index).length > 0
+  );
+
+  const rootsByFile = new Map<string, Element[]>();
+  for (const element of root.querySelectorAll(`[${SOURCE_ATTRIBUTE}]`)) {
+    if (element.closest('[data-astro-ai-ui], astro-dev-toolbar') !== null) continue;
+    const file = sourceFile(element);
+    if (file === undefined || !instances.has(file)) continue;
+    const parent = element.parentElement?.closest(`[${SOURCE_ATTRIBUTE}]`);
+    if (parent != null && sourceFile(parent) === file) continue;
+    rootsByFile.set(file, [...(rootsByFile.get(file) ?? []), element]);
+  }
+
+  const layout: SectionLayout = { sections: [], pages: [] };
+  for (const [file, indexes] of instances) {
+    if (file.startsWith('src/pages/')) {
+      for (const index of indexes) {
+        if (worthShowing(index)) {
+          layout.pages.push({ file, index, timing: timing.components[index]!, fetches: fetchesFor(index) });
+        }
+      }
+      continue;
+    }
+    const roots = rootsByFile.get(file) ?? [];
+    const groups = roots.length > 0 && roots.length % indexes.length === 0
+      ? chunk(roots, roots.length / indexes.length)
+      : roots.map((element) => [element]);
+    indexes.forEach((index, position) => {
+      const group = groups[position];
+      if (group === undefined || !worthShowing(index)) return;
+      layout.sections.push({ file, index, timing: timing.components[index]!, fetches: fetchesFor(index), roots: group });
+    });
+  }
+  return layout;
+}
+
+function sourceFile(element: Element): string | undefined {
+  const value = element.getAttribute(SOURCE_ATTRIBUTE);
+  if (value === null) return undefined;
+  const colon = value.lastIndexOf(':');
+  return colon > 0 ? value.slice(0, colon) : value;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const groups: T[][] = [];
+  for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size));
+  return groups;
 }
 
 /**
@@ -278,18 +329,23 @@ export function sectionTiming(timing: ServerRenderTiming, context: SelectionCont
 export function fetchHints(section: ServerFetchTiming[], page: ServerFetchTiming[]): string[] {
   const hints: string[] = [];
   const counts = new Map<string, number>();
-  for (const { method, url } of page) counts.set(`${method} ${url}`, (counts.get(`${method} ${url}`) ?? 0) + 1);
-  for (const [key, count] of counts) {
-    if (count > 1 && section.some(({ method, url }) => `${method} ${url}` === key)) {
-      hints.push(`${key} is fetched ${count} times in this render; fetching it once and passing the result down saves ${count - 1} round trip${count === 2 ? '' : 's'}.`);
+  for (const { method, url } of page) counts.set(`${method} ${shortUrl(url)}`, (counts.get(`${method} ${shortUrl(url)}`) ?? 0) + 1);
+  const reported = new Set<string>();
+  for (const { method, url } of section) {
+    const key = `${method} ${shortUrl(url)}`;
+    const count = counts.get(key) ?? 0;
+    if (count > 1 && !reported.has(key)) {
+      reported.add(key);
+      hints.push(`${key} is fetched ${count} times in this render; fetching it once and passing it down saves ${count - 1} round trip${count === 2 ? '' : 's'}.`);
     }
   }
-  const byComponent = new Map<string, ServerFetchTiming[]>();
+  const byInstance = new Map<string, ServerFetchTiming[]>();
   for (const entry of section) {
     if (entry.component === undefined) continue;
-    byComponent.set(entry.component, [...(byComponent.get(entry.component) ?? []), entry]);
+    const key = `${entry.component}#${entry.componentIndex ?? ''}`;
+    byInstance.set(key, [...(byInstance.get(key) ?? []), entry]);
   }
-  for (const [file, entries] of byComponent) {
+  for (const entries of byInstance.values()) {
     let sequential = 0;
     for (let index = 1; index < entries.length; index += 1) {
       const previous = entries[index - 1]!;
@@ -298,17 +354,17 @@ export function fetchHints(section: ServerFetchTiming[], page: ServerFetchTiming
       }
     }
     if (sequential > 0) {
-      hints.push(`${basename(file)} awaits ${sequential + 1} fetches one after another; if they are independent, Promise.all runs them together.`);
+      hints.push(`${basename(entries[0]!.component!)} awaits ${sequential + 1} fetches one after another; if they are independent, Promise.all runs them together.`);
     }
   }
   for (const entry of section) {
-    if (entry.error !== undefined) hints.push(`${entry.method} ${entry.url} failed: ${entry.error}`);
-    else if (entry.status !== undefined && entry.status >= 400) hints.push(`${entry.method} ${entry.url} answered ${entry.status}.`);
+    if (entry.error !== undefined) hints.push(`${entry.method} ${shortUrl(entry.url)} failed: ${entry.error}`);
+    else if (entry.status !== undefined && entry.status >= 400) hints.push(`${entry.method} ${shortUrl(entry.url)} answered ${entry.status}.`);
   }
   return hints;
 }
 
-/** Observations about the element's own paint, layout and images. */
+/** Observations about an element's own paint, layout and images. */
 export function elementHints(report: ElementPerformance): string[] {
   const hints: string[] = [];
   for (const image of report.images) {
@@ -318,7 +374,7 @@ export function elementHints(report: ElementPerformance): string[] {
     if (image.isLcp && !image.highPriority) {
       hints.push('The LCP image has no fetchpriority="high", so the browser may queue it behind other requests.');
     }
-    if (image.renderedWidth > 0 && image.naturalWidth > image.renderedWidth * Math.max(2, devicePixelRatioOr1()) ) {
+    if (image.renderedWidth > 0 && image.naturalWidth > image.renderedWidth * Math.max(2, devicePixelRatioOr1())) {
       hints.push(`${shortUrl(image.src)} is ${image.naturalWidth}px wide but shown at ${image.renderedWidth}px; a smaller source or srcset would cut its download.`);
     }
   }
@@ -332,35 +388,86 @@ export function elementHints(report: ElementPerformance): string[] {
   return hints;
 }
 
-/** Plain-text summary handed to the agent. */
-export function describePerformance(
-  context: SelectionContext,
-  report: ElementPerformance,
-  section: SectionTiming | undefined,
+/** Plain-text summary of one section, handed to the agent. */
+export function describeSection(
+  section: Omit<PageSection, 'roots'>,
+  report: ElementPerformance | undefined,
+  hints: string[],
 ): string {
   const lines: string[] = [
-    `Selected: ${context.selectedNode.componentName ?? context.selectedNode.tagName ?? 'element'} at ${context.selectedNode.source.file}:${context.selectedNode.source.start.line}.`,
+    `Section rendered by ${section.file}.`,
     'Measured on the Astro dev server, so absolute numbers are higher than production; relative cost is what matters.',
+    `Frontmatter: ${section.timing.durationMs === undefined ? 'returned early or threw' : formatMs(section.timing.durationMs)}.`,
   ];
-  if (report.lcp !== undefined) {
-    const b = report.lcp.breakdown;
-    lines.push(`LCP: this element ${report.lcp.relation === 'is' ? 'is' : 'contains'} the LCP element, painted at ${formatMs(report.lcp.timeMs)}${b === undefined ? '' : ` (TTFB ${formatMs(b.ttfb)}, load delay ${formatMs(b.loadDelay)}, load ${formatMs(b.loadDuration)}, render delay ${formatMs(b.renderDelay)})`}.`);
+  for (const entry of section.fetches) {
+    lines.push(`Server fetch: ${entry.method} ${entry.url} → ${entry.error ?? entry.status ?? 'pending'} in ${entry.durationMs === undefined ? '?' : formatMs(entry.durationMs)}${entry.bytes === undefined ? '' : `, ${formatBytes(entry.bytes)}`}, started at +${formatMs(entry.startMs)}.`);
   }
-  if (report.shifts.count > 0) lines.push(`Layout shifts: ${report.shifts.count}, score ${report.shifts.score}.`);
-  for (const image of report.images) {
+  if (report?.lcp !== undefined) {
+    const b = report.lcp.breakdown;
+    lines.push(`LCP: this section ${report.lcp.relation === 'is' ? 'is' : 'contains'} the LCP element, painted at ${formatMs(report.lcp.timeMs)}${b === undefined ? '' : ` (TTFB ${formatMs(b.ttfb)}, load delay ${formatMs(b.loadDelay)}, load ${formatMs(b.loadDuration)}, render delay ${formatMs(b.renderDelay)})`}.`);
+  }
+  if (report !== undefined && report.shifts.count > 0) lines.push(`Layout shifts: ${report.shifts.count}, score ${report.shifts.score}.`);
+  for (const image of report?.images ?? []) {
     lines.push(`Image ${image.src}: ${image.naturalWidth}px source shown at ${image.renderedWidth}px${image.durationMs === undefined ? '' : `, loaded in ${formatMs(image.durationMs)}`}${image.lazy ? ', lazy' : ''}${image.isLcp ? ', LCP' : ''}.`);
   }
-  if (section !== undefined) {
-    for (const component of section.components) {
-      lines.push(`Frontmatter ${component.file}: ${component.durationMs === undefined ? 'returned early or threw' : formatMs(component.durationMs)}.`);
-    }
-    for (const entry of section.fetches) {
-      lines.push(`Server fetch from ${entry.component}: ${entry.method} ${entry.url} → ${entry.error ?? entry.status ?? 'pending'} in ${entry.durationMs === undefined ? '?' : formatMs(entry.durationMs)}, started at +${formatMs(entry.startMs)}.`);
-    }
-  }
-  const hints = [...elementHints(report), ...(section?.hints ?? [])];
   if (hints.length > 0) lines.push('Observations:', ...hints.map((hint) => `- ${hint}`));
   return lines.join('\n');
+}
+
+export type Rating = 'good' | 'needs-improvement' | 'poor';
+
+/** Core Web Vitals thresholds: good up to the first, poor above the second. */
+export const VITAL_THRESHOLDS = {
+  TTFB: [800, 1800],
+  FCP: [1800, 3000],
+  LCP: [2500, 4000],
+  CLS: [0.1, 0.25],
+  INP: [200, 500],
+} as const;
+
+export type VitalName = keyof typeof VITAL_THRESHOLDS;
+
+export function rateVital(name: VitalName, value: number): Rating {
+  const [good, poor] = VITAL_THRESHOLDS[name];
+  return value <= good ? 'good' : value <= poor ? 'needs-improvement' : 'poor';
+}
+
+/** The page's vitals, in display order, with the measured ones rated. */
+export function pageVitals(page: PageSummary): Array<{ name: VitalName; value?: number; rating?: Rating }> {
+  const values: Record<VitalName, number | undefined> = {
+    TTFB: page.ttfbMs,
+    FCP: page.fcpMs,
+    LCP: page.lcpMs,
+    CLS: page.cls,
+    INP: page.inpMs,
+  };
+  return (Object.keys(VITAL_THRESHOLDS) as VitalName[]).map((name) => {
+    const value = values[name];
+    return value === undefined ? { name } : { name, value, rating: rateVital(name, value) };
+  });
+}
+
+/** Every vital outside its good range, worded for a prompt. */
+export function vitalIssues(page: PageSummary): string[] {
+  return pageVitals(page).flatMap(({ name, value, rating }) => {
+    if (value === undefined || rating === undefined || rating === 'good') return [];
+    const shown = name === 'CLS' ? String(value) : formatMs(value);
+    const good = name === 'CLS' ? String(VITAL_THRESHOLDS[name][0]) : formatMs(VITAL_THRESHOLDS[name][0]);
+    return [`${name} is ${shown}, ${rating === 'poor' ? 'poor' : 'needs improvement'} (good is ${good} or less).`];
+  });
+}
+
+/**
+ * What goes in the chat textbox: the problems, in a few lines the user can
+ * read and edit before sending. The full measurements travel separately as
+ * attached context.
+ */
+export function improvementPrompt(subject: string, issues: string[]): string {
+  return [
+    `Improve the performance of ${subject}:`,
+    ...issues.map((issue) => `- ${issue}`),
+    'Keep what the page renders the same.',
+  ].join('\n');
 }
 
 export function formatMs(value: number): string {

@@ -13,7 +13,7 @@ const categories = await getJson<string[]>('/api/perf/categories.json', Astro.ur
 
 <Layout
 	title="Performance"
-	lede="Select a section and choose Perf to see what it waited on."
+	lede="Open the Build with AI app: every section is outlined with its render time and the calls it made."
 	seo={{
 		description:
 			'Sections with slow, sequential, duplicated and failing server fetches, and an image that is the page’s largest paint, for the Perf panel to rank.',
@@ -22,11 +22,13 @@ const categories = await getJson<string[]>('/api/perf/categories.json', Astro.ur
 	}}
 >
 	<Callout title="What to try" tone="accent">
-		Select the large image and choose Perf: it is the page's Largest
-		Contentful Paint, and it is lazy-loaded with no size declared, so the
-		panel flags both. Then select Stock and pricing to see two fetches
-		awaited one after the other, Reviews for a fetch the page makes twice, and
-		the restock line for a call that answers 404.
+		Open the Build with AI app. Stock and pricing is outlined in red: its two
+		calls are awaited one after the other. Reviews makes a call the page makes
+		too, the restock line's call answers 404, and the large image is the
+		page's Largest Contentful Paint, lazy-loaded with no size declared. Click
+		a card's header for its findings. Ask AI on the corner card opens the chat
+		with the problems already written out; the Perf button in the chat window
+		hides the outlines.
 	</Callout>
 
 	<!--
@@ -45,13 +47,6 @@ const categories = await getJson<string[]>('/api/perf/categories.json', Astro.ur
 	</div>
 
 	<RestockNotice />
-
-	<section class="thumbs">
-		<h2>Thumbnails</h2>
-		<!-- A 1200px source drawn at 120px: the panel suggests a smaller one. -->
-		<img src="/og/card.png" alt="Thumbnail one" width="120" height="63" />
-		<img src="/og/undersized.png" alt="Thumbnail two" width="120" height="63" />
-	</section>
 </Layout>
 
 <style>
@@ -70,22 +65,5 @@ const categories = await getJson<string[]>('/api/perf/categories.json', Astro.ur
 		display: grid;
 		gap: 1rem;
 		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-	}
-
-	.thumbs {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem;
-		align-items: center;
-	}
-
-	.thumbs h2 {
-		font-size: 1.05rem;
-		margin: 0;
-		width: 100%;
-	}
-
-	.thumbs img {
-		border-radius: 6px;
 	}
 </style>

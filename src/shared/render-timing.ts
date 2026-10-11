@@ -12,6 +12,11 @@ export type ServerFetchTiming = {
   method: string;
   /** Project-relative `.astro` file whose frontmatter was running, if any. */
   component?: string;
+  /**
+   * Index into `components` of the instance that made the call, so a component
+   * rendered three times keeps three separate sets of fetches.
+   */
+  componentIndex?: number;
   startMs: number;
   /** Until the response headers arrived, which is when `fetch()` resolves. */
   durationMs?: number;

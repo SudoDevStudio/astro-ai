@@ -22,12 +22,13 @@ import { createChatDrawerStyle } from './chat-drawer.js';
 import { ChatWindowManager } from './chat-windows.js';
 import { DiagnosticActionBridge } from './diagnostic-actions.js';
 import { SelectionOverlay } from './overlay.js';
-import { PagePerformanceMonitor, sectionTiming } from './performance.js';
-import type { PerformanceSnapshot } from './performance-panel.js';
+import { PerformanceOverlay } from './perf-overlay.js';
+import { PagePerformanceMonitor } from './performance.js';
 import type { PageRoute } from '../shared/page-routes.js';
 import { createSeoSheetStyle, SeoPreviewSheet } from './seo-sheet.js';
 
 const APP_OPEN_KEY = 'astro-ai:app-open';
+const PERF_OVERLAY_KEY = 'astro-ai:perf-overlay';
 
 export default defineToolbarApp({
   init(canvas, app, server) {
@@ -43,14 +44,26 @@ export default defineToolbarApp({
     let insertionZonesRequestId: string | undefined;
     let overlay: SelectionOverlay;
     let seoSheet: SeoPreviewSheet;
+    // Before the chat windows, which reposition it whenever the dock reflows.
+    const perfOverlay = new PerformanceOverlay({
+      onFix: (context, instruction) => openWithExternalContext(context, instruction),
+    });
     const windows = new ChatWindowManager({
       onOpenSeo() {
         seoSheet.toggle();
+      },
+      onTogglePerf() {
+        // On until switched off, so the first look at the editor already
+        // shows what each section cost.
+        const showing = readSession(PERF_OVERLAY_KEY) !== 'false';
+        writeSession(PERF_OVERLAY_KEY, String(!showing));
+        syncPerfOverlay();
       },
       onPageReflow() {
         // The dock just changed how much width the page has, so every outline
         // and arrow has to be measured against the new layout.
         overlay.reposition();
+        perfOverlay.reposition();
       },
       onRestoreSelection(contexts, elements) {
         overlay.showSelection(contexts, elements);
@@ -137,27 +150,43 @@ export default defineToolbarApp({
       onSelectionAnchorChange(rect) {
         windows.setSelectionAnchor(rect);
       },
-      async onPerformance(context, target) {
-        const reply = await requestRenderTiming();
-        const snapshot: PerformanceSnapshot = {
-          element: performanceMonitor.element(target),
-          page: performanceMonitor.page(),
-        };
-        if (reply?.timing !== undefined) snapshot.section = sectionTiming(reply.timing, context);
-        else if (reply === undefined) snapshot.serverNote = 'The dev server did not answer with render timings.';
-        else if (!reply.enabled) snapshot.serverNote = 'Server render timing is off (renderTiming: false).';
-        return snapshot;
-      },
-      onPerformanceFix(context) {
-        openWithExternalContext(context);
-      },
     });
-    const openWithExternalContext = (context: Parameters<typeof windows.openWithExternalContext>[0]): void => {
+    const openWithExternalContext = (
+      context: Parameters<typeof windows.openWithExternalContext>[0],
+      instruction?: string,
+    ): void => {
       overlay.clearSelection();
       app.toggleState({ state: true });
-      window.setTimeout(() => windows.openWithExternalContext(context), 0);
+      window.setTimeout(() => windows.openWithExternalContext(context, instruction), 0);
     };
     const diagnosticActions = new DiagnosticActionBridge({ onFix: openWithExternalContext });
+    let perfRequest = 0;
+
+    /**
+     * Draws or clears the section timing overlay to match the app and the
+     * toggle. Each draw asks for timings afresh, and an answer that arrives
+     * after a newer request, or after the overlay was switched off, is dropped.
+     */
+    function syncPerfOverlay(): void {
+      const wanted = appOpen && readSession(PERF_OVERLAY_KEY) !== 'false';
+      windows.setPerfActive(wanted);
+      const request = ++perfRequest;
+      if (!wanted) {
+        perfOverlay.clear();
+        return;
+      }
+      void requestRenderTiming().then((reply) => {
+        if (disposed || request !== perfRequest) return;
+        const note = reply === undefined
+          ? 'The dev server did not answer with render timings.'
+          : !reply.enabled
+            ? 'Server render timing is off (renderTiming: false), so only browser metrics are shown.'
+            : reply.timing === undefined
+              ? 'No server render recorded for this page yet. Reload it to record one.'
+              : undefined;
+        perfOverlay.render(reply?.timing, performanceMonitor, note);
+      });
+    }
     seoSheet = new SeoPreviewSheet({
       onFix: openWithExternalContext,
       onRequestRoutes: () => requestSiteRoutes(),
@@ -179,8 +208,11 @@ export default defineToolbarApp({
       canvas.append(drawerStyle, seoStyle, windows.element, seoSheet.element);
     }
 
+    let appOpen = false;
     app.onToggled(({ state }) => {
       writeSession(APP_OPEN_KEY, String(state));
+      appOpen = state;
+      syncPerfOverlay();
       if (state) {
         ensureMounted();
         overlay.enable();
@@ -310,6 +342,8 @@ export default defineToolbarApp({
         windows.openAll(false, true, false);
       }
       requestInsertionZones();
+      // The new page has its own sections and its own render.
+      syncPerfOverlay();
     };
     document.addEventListener('astro:after-swap', onNavigation);
     document.addEventListener('astro:page-load', onNavigation);
@@ -322,6 +356,7 @@ export default defineToolbarApp({
       document.removeEventListener('astro:page-load', onNavigation);
       window.removeEventListener('popstate', onNavigation);
       overlay.destroy();
+      perfOverlay.destroy();
       performanceMonitor.destroy();
       diagnosticActions.destroy();
       seoSheet.destroy();

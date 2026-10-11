@@ -30,6 +30,8 @@ export type ChatWindowCallbacks = {
   onSelectionPaused(paused: boolean): void;
   /** Opens the share preview for the current route. */
   onOpenSeo?(): void;
+  /** Shows or hides the section timing overlay on the page. */
+  onTogglePerf?(): void;
   /**
    * The dock took or released its column, so the page underneath has reflowed
    * and every measured overlay is now pointing at where things used to be.
@@ -98,6 +100,7 @@ export class ChatWindowManager {
   /** True once the user has switched layouts, which outranks the configured default. */
   #layoutChosen: boolean;
   #seoAvailable = true;
+  #perfActive = false;
   #dockWidth: number;
   #dockHeight: number;
   #dockSide: DockSide;
@@ -336,6 +339,12 @@ export class ChatWindowManager {
     this.setLayout(layout, false);
   }
 
+  /** Mirrors the section timing overlay's state onto every window's toggle. */
+  setPerfActive(active: boolean): void {
+    this.#perfActive = active;
+    for (const drawer of this.#drawers.values()) drawer.setPerfActive(active);
+  }
+
   /** Hides the share preview control everywhere when the project turned it off. */
   setSeoAvailable(available: boolean): void {
     this.#seoAvailable = available;
@@ -438,9 +447,9 @@ export class ChatWindowManager {
     this.#restoreForIncomingContext();
   }
 
-  openWithExternalContext(context: AgentExternalContext): void {
+  openWithExternalContext(context: AgentExternalContext, instruction?: string): void {
     const drawer = this.focused() ?? this.#drawers.values().next().value;
-    drawer?.openWithExternalContext(context);
+    drawer?.openWithExternalContext(context, instruction);
     this.#restoreForIncomingContext();
   }
 
@@ -530,11 +539,15 @@ export class ChatWindowManager {
         ...(this.#callbacks.onOpenSeo === undefined
           ? {}
           : { onOpenSeo: () => this.#callbacks.onOpenSeo?.() }),
+        ...(this.#callbacks.onTogglePerf === undefined
+          ? {}
+          : { onTogglePerf: () => this.#callbacks.onTogglePerf?.() }),
         onToggleLayout: () => this.toggleLayout(),
       },
       { sessionId: record.id, title: record.title, index, layout: this.#layout },
     );
     drawer.setSeoAvailable(this.#seoAvailable);
+    drawer.setPerfActive(this.#perfActive);
     this.#drawers.set(record.id, drawer);
     this.#order.push(record.id);
     this.#stack.push(record.id);

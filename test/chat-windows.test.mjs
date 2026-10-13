@@ -290,12 +290,34 @@ test('pauses page selection only when every window is minimized', () => {
     });
     const dev = manager.focused();
     const qa = manager.create();
+    manager.openAll(false, false, false);
 
     dev.toggleCollapsed();
     assert.equal(paused.at(-1), false);
     qa.toggleCollapsed();
     assert.equal(paused.at(-1), true);
     dev.toggleCollapsed();
+    assert.equal(paused.at(-1), false);
+  } finally { cleanup(); }
+});
+
+test('leaves page selection alone while the app is closed', () => {
+  const cleanup = installDom();
+  try {
+    const paused = [];
+    const manager = new ChatWindowManager({
+      ...noopCallbacks(),
+      onSelectionPaused(value) { paused.push(value); },
+    });
+    manager.hideAll(false);
+
+    // The configured layout arrives with the server's ready message on every
+    // page load, before anyone has opened the app.
+    manager.setDefaultLayout('fixed');
+    manager.toggleLayout();
+    assert.deepEqual(paused, []);
+
+    manager.openAll(false, false, false);
     assert.equal(paused.at(-1), false);
   } finally { cleanup(); }
 });

@@ -716,6 +716,10 @@ export class ChatWindowManager {
   };
 
   #syncSelectionPaused(): void {
+    // Selection belongs to the open app. A layout applied while it is closed —
+    // the configured `chatLayout`, arriving with the server's ready message on
+    // every page load — must not switch the overlay on behind it.
+    if (!this.#visible) return;
     const drawers = [...this.#drawers.values()];
     // A collapsed dock hides every conversation at once, which is the docked
     // equivalent of collapsing every floating window.

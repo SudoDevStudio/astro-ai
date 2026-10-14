@@ -15,12 +15,54 @@
  * in a toolbar bundle.
  */
 
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import {
   resolveOptions,
   type AstroDomStampOptions,
 } from '@sudodevstudio/astro-dom-stamp/core';
+import type { Plugin } from 'vite';
 
 import type { ContentSourceDefinition } from '../shared/content-sources.js';
+
+const DOM_STAMP_PACKAGE = '@sudodevstudio/astro-dom-stamp';
+
+/**
+ * Resolves dom-stamp's own specifiers from this package rather than the app.
+ *
+ * dom-stamp writes `import … from '@sudodevstudio/astro-dom-stamp/runtime'`
+ * (and `/browser`, `/core`) into virtual modules and an injected page script.
+ * Those have no file of their own, so Vite resolves them from the project
+ * root. The app never lists dom-stamp — the editor depends on it — so whenever
+ * it is not hoisted beside the app (pnpm, a linked checkout, a nested install)
+ * the page fails to render with "Cannot find module". Resolving from here
+ * finds the copy the editor was installed with.
+ */
+export function domStampResolvePlugin(): Plugin {
+  const importer = fileURLToPath(import.meta.url);
+  return {
+    name: 'astro-ai:dom-stamp-resolve',
+    enforce: 'pre',
+    config() {
+      return {
+        // An externalized SSR import is resolved again by Node from its
+        // importer, which for a virtual module is the root again. Keeping the
+        // package in Vite's pipeline sends it back through `resolveId`.
+        ssr: { noExternal: [DOM_STAMP_PACKAGE] },
+        server: { fs: { allow: [domStampPackageRoot()] } },
+      };
+    },
+    async resolveId(id, _importer, options) {
+      if (id !== DOM_STAMP_PACKAGE && !id.startsWith(`${DOM_STAMP_PACKAGE}/`)) return null;
+      return this.resolve(id, importer, { ...options, skipSelf: true });
+    },
+  };
+}
+
+function domStampPackageRoot(): string {
+  return dirname(fileURLToPath(import.meta.resolve(`${DOM_STAMP_PACKAGE}/package.json`)));
+}
 
 export type DomStampOption = AstroDomStampOptions & {
   /**

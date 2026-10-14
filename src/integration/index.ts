@@ -54,7 +54,7 @@ import { VisualCommandEngine } from '../visual/command-engine.js';
 import { PatchTransactionStore } from '../visual/patch-transactions.js';
 import { VisualCapabilityResolver } from '../visual/capability-resolver.js';
 import { buildAIVitePlugin } from '../vite/build-ai-plugin.js';
-import { contentSourceFromDomStamp, type DomStampOption } from './dom-stamp.js';
+import { contentSourceFromDomStamp, domStampResolvePlugin, type DomStampOption } from './dom-stamp.js';
 import { RenderTimingRecorder, renderTimingHooks } from './render-timing.js';
 
 const TOOLBAR_APP_ID = 'astro-ai';
@@ -246,7 +246,10 @@ export default function buildWithAI(
             const createDomStamp = domStampModule.default as unknown as (
               options: DomStampOption,
             ) => AstroIntegration;
-            updateConfig({ integrations: [createDomStamp(options.domStamp)] });
+            updateConfig({
+              integrations: [createDomStamp(options.domStamp)],
+              vite: { plugins: [domStampResolvePlugin()] },
+            });
           } catch (error) {
             const detail = error instanceof Error ? error.message : 'Invalid domStamp configuration.';
             logger.error(`[astro-ai] ${detail} dom-stamp is not registered.`);

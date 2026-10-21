@@ -25,6 +25,7 @@ import {
 import type { Plugin } from 'vite';
 
 import type { ContentSourceDefinition } from '../shared/content-sources.js';
+import { allowServingPlugin } from '../vite/fs-allow.js';
 
 const DOM_STAMP_PACKAGE = '@sudodevstudio/astro-dom-stamp';
 
@@ -39,7 +40,14 @@ const DOM_STAMP_PACKAGE = '@sudodevstudio/astro-dom-stamp';
  * the page fails to render with "Cannot find module". Resolving from here
  * finds the copy the editor was installed with.
  */
-export function domStampResolvePlugin(): Plugin {
+export function domStampResolvePlugins(): Plugin[] {
+  return [
+    domStampResolvePlugin(),
+    allowServingPlugin('astro-ai:dom-stamp-fs-allow', () => [domStampPackageRoot()]),
+  ];
+}
+
+function domStampResolvePlugin(): Plugin {
   const importer = fileURLToPath(import.meta.url);
   return {
     name: 'astro-ai:dom-stamp-resolve',
@@ -50,7 +58,6 @@ export function domStampResolvePlugin(): Plugin {
         // importer, which for a virtual module is the root again. Keeping the
         // package in Vite's pipeline sends it back through `resolveId`.
         ssr: { noExternal: [DOM_STAMP_PACKAGE] },
-        server: { fs: { allow: [domStampPackageRoot()] } },
       };
     },
     async resolveId(id, _importer, options) {

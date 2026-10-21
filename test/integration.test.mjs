@@ -83,8 +83,15 @@ test('registers the toolbar and serve-only Vite plugin during dev', () => {
   // The integration serves its own toolbar bundle, so the package root has to
   // be allowed alongside the project root. Derive it rather than matching a
   // directory name, which changes with the checkout.
-  const packageRoot = fileURLToPath(new URL('../', import.meta.url));
-  assert.ok(configUpdates[0].vite.server.fs.allow.includes(packageRoot));
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
+  // Setting `server.fs.allow` drops Vite's workspace-root default, which pnpm
+  // monorepos need for their hoisted store, so the list is appended to instead.
+  assert.equal(configUpdates[0].vite.server, undefined);
+  const allowPlugin = configUpdates[0].vite.plugins.find((p) => p.name === 'astro-ai:fs-allow');
+  const resolved = { root: '/project', server: { fs: { allow: ['/workspace'] } } };
+  allowPlugin.configResolved(resolved);
+  assert.equal(resolved.server.fs.allow[0], '/workspace');
+  assert.ok(resolved.server.fs.allow.includes(packageRoot));
 });
 
 test('the serve-only Vite plugin instruments native React JSX and TSX nodes', () => {

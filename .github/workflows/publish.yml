@@ -77,6 +77,9 @@ jobs:
             echo "promoted=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Runs before the install: a lockfile missing the Linux bindings fails
+      # `npm ci` itself, and this names what is missing instead.
+      - run: node --test test/package-lock.test.mjs
       - run: npm ci --include=optional
       - run: npm run format:check
       - run: npm run check

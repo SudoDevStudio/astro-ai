@@ -15,6 +15,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
+      # Runs before the install: a lockfile missing the Linux bindings fails
+      # `npm ci` itself, and this names what is missing instead.
+      - run: node --test test/package-lock.test.mjs
       - run: npm ci --include=optional
       - run: npm run format:check
       - run: npm run check

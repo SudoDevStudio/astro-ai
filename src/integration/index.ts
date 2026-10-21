@@ -54,7 +54,8 @@ import { VisualCommandEngine } from '../visual/command-engine.js';
 import { PatchTransactionStore } from '../visual/patch-transactions.js';
 import { VisualCapabilityResolver } from '../visual/capability-resolver.js';
 import { buildAIVitePlugin } from '../vite/build-ai-plugin.js';
-import { contentSourceFromDomStamp, domStampResolvePlugin, type DomStampOption } from './dom-stamp.js';
+import { allowServingPlugin } from '../vite/fs-allow.js';
+import { contentSourceFromDomStamp, domStampResolvePlugins, type DomStampOption } from './dom-stamp.js';
 import { RenderTimingRecorder, renderTimingHooks } from './render-timing.js';
 
 const TOOLBAR_APP_ID = 'astro-ai';
@@ -248,7 +249,7 @@ export default function buildWithAI(
             ) => AstroIntegration;
             updateConfig({
               integrations: [createDomStamp(options.domStamp)],
-              vite: { plugins: [domStampResolvePlugin()] },
+              vite: { plugins: domStampResolvePlugins() },
             });
           } catch (error) {
             const detail = error instanceof Error ? error.message : 'Invalid domStamp configuration.';
@@ -358,15 +359,10 @@ export default function buildWithAI(
             plugins: [buildAIVitePlugin(
               resolver,
               renderTiming === undefined ? {} : { frontmatterHooks: renderTimingHooks },
-            )],
-            server: {
-              fs: {
-                allow: [
-                  fileURLToPath(config.root),
-                  fileURLToPath(new URL('../../', import.meta.url)),
-                ],
-              },
-            },
+            ), allowServingPlugin('astro-ai:fs-allow', () => [
+              fileURLToPath(config.root),
+              fileURLToPath(new URL('../../', import.meta.url)),
+            ])],
           },
         });
       },

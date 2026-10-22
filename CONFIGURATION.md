@@ -42,7 +42,8 @@ and redo. Only the chat needs an agent.
 ## `agent`
 
 Which CLI answers questions and writes code. Authenticate it before starting
-Astro: `codex login`, or launch `claude` and complete its login flow.
+Astro: `codex login`, or launch `claude` and complete its login flow. To use an
+API key instead, pass it as `apiKey` (see below).
 
 ```js
 // Shorthand.
@@ -54,6 +55,7 @@ buildWithAI({
     provider: 'claude',
     model: 'your-model',
     command: '/custom/path/to/claude',
+    apiKey: process.env.ANTHROPIC_API_KEY,
     agentTimeoutMs: 300_000,
     diagnosticsTimeoutMs: 120_000,
   },
@@ -69,8 +71,16 @@ buildWithAI({});
 | `provider` | `'codex'` or `'claude'` | required |
 | `command` | Path to the executable when it is not on `PATH` | the provider name |
 | `model` | Model passed through to the CLI | the CLI's own default |
+| `apiKey` | API key used instead of the CLI's login | the CLI's own login |
 | `agentTimeoutMs` | Ceiling for one agent run | `300_000` (5 minutes) |
 | `diagnosticsTimeoutMs` | Ceiling for the diagnostics run afterwards | `120_000` (2 minutes) |
+
+`apiKey` is handed only to the agent CLI, as `CODEX_API_KEY` for Codex or
+`ANTHROPIC_API_KEY` for Claude. Other environment variables, including any key
+you have exported, are still stripped from every process the editor spawns.
+Read the key from the environment rather than committing it to the config.
+Claude's own shell tool inherits its environment, so commands it runs can see
+the key.
 
 A misconfigured agent is reported in the terminal and the chat says it is
 unavailable. The rest of the editor keeps working.

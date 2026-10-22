@@ -34,6 +34,11 @@ export type CliAgentFallbackOptions = {
   projectRoot: string;
   command?: string;
   model?: string;
+  /**
+   * Authenticates the CLI with an API key instead of its own login. It reaches
+   * only the agent process, as `CODEX_API_KEY` or `ANTHROPIC_API_KEY`.
+   */
+  apiKey?: string;
   excludeDirectories?: string[];
   skills?: string[];
   statusCacheMs?: number;
@@ -92,6 +97,7 @@ export class CliAgentFallback extends AgentFallback {
   readonly #projectRoot: string;
   readonly #command: string;
   readonly #model: string | undefined;
+  readonly #agentEnvironment: NodeJS.ProcessEnv;
   readonly #skills: string[];
   readonly #statusCacheMs: number;
   readonly #workspaceOptions: WorkspaceMirrorOptions;
@@ -107,6 +113,10 @@ export class CliAgentFallback extends AgentFallback {
     this.#projectRoot = resolve(options.projectRoot);
     this.#command = options.command ?? options.provider;
     this.#model = options.model;
+    this.#agentEnvironment = apiKeyEnvironment(
+      options.provider,
+      options.apiKey,
+    );
     this.#skills = validateProjectPaths(options.skills ?? [], "skill");
     this.#statusCacheMs = options.statusCacheMs ?? 15_000;
     this.#agentTimeoutMs = positiveTimeout(
@@ -135,16 +145,24 @@ export class CliAgentFallback extends AgentFallback {
       this.#statusCache.expiresAt > Date.now()
     )
       return this.#statusCache.value;
+    // `codex login status` ignores API keys in the environment, so with a
+    // configured key the check only confirms the CLI is installed.
+    const usesApiKey = Object.keys(this.#agentEnvironment).length > 0;
     let result: ProcessResult;
     try {
       result = await runProcess(
         this.#command,
-        this.#provider === "codex" ? ["login", "status"] : ["auth", "status"],
+        usesApiKey
+          ? ["--version"]
+          : this.#provider === "codex"
+            ? ["login", "status"]
+            : ["auth", "status"],
         this.#projectRoot,
         "",
         undefined,
         undefined,
         STATUS_TIMEOUT_MS,
+        this.#agentEnvironment,
       );
     } catch (error) {
       const message =
@@ -167,16 +185,20 @@ export class CliAgentFallback extends AgentFallback {
     } else if (result.code !== 0) {
       value = {
         provider: this.#provider,
-        available: true,
+        available: !usesApiKey,
         authenticated: false,
-        message: `Run “${this.#command} login” in your terminal, then retry the connection.`,
+        message: usesApiKey
+          ? `${displayName(this.#provider)} CLI did not start: ${firstLine(result.stderr || result.stdout) ?? `exit code ${result.code}`}`
+          : `Run “${this.#command} login” in your terminal, or configure agent.apiKey, then retry the connection.`,
       };
     } else {
       value = {
         provider: this.#provider,
         available: true,
         authenticated: true,
-        message: `${displayName(this.#provider)} CLI is installed and authenticated.`,
+        message: usesApiKey
+          ? `${displayName(this.#provider)} CLI is installed and will use the configured API key.`
+          : `${displayName(this.#provider)} CLI is installed and authenticated.`,
       };
     }
     this.#statusCache = { value, expiresAt: Date.now() + this.#statusCacheMs };
@@ -257,6 +279,7 @@ export class CliAgentFallback extends AgentFallback {
             request.onProgress?.(update.state ?? "tool", update.message);
         },
         this.#agentTimeoutMs,
+        this.#agentEnvironment,
       );
       throwIfAborted(request.signal);
       if (result.spawnError === "ENOENT") {
@@ -585,12 +608,13 @@ async function runProcess(
   signal?: AbortSignal,
   onLine?: ProcessLineCallback,
   timeoutMs?: number,
+  extraEnvironment: NodeJS.ProcessEnv = {},
 ): Promise<ProcessResult> {
   if (signal?.aborted === true) return Promise.reject(abortError());
   return new Promise((resolveProcess, reject) => {
     const child = spawn(command, args, {
       cwd,
-      env: createSafeChildEnvironment(process.env),
+      env: { ...createSafeChildEnvironment(process.env), ...extraEnvironment },
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout = new LineAccumulator(MAX_PROCESS_OUTPUT, (line) =>
@@ -726,6 +750,25 @@ const SAFE_ENVIRONMENT_KEYS = new Set([
   "https_proxy",
   "no_proxy",
 ]);
+const API_KEY_VARIABLES: Record<CliAgentProvider, string> = {
+  codex: "CODEX_API_KEY",
+  claude: "ANTHROPIC_API_KEY",
+};
+/** The environment that hands a configured API key to the provider CLI. */
+export function apiKeyEnvironment(
+  provider: CliAgentProvider,
+  apiKey: string | undefined,
+): NodeJS.ProcessEnv {
+  if (apiKey === undefined) return {};
+  if (typeof apiKey !== "string" || apiKey.trim() === "")
+    throw new Error(
+      "agent.apiKey must be a non-empty string. Leave it out to use the CLI's own login.",
+    );
+  return { [API_KEY_VARIABLES[provider]]: apiKey.trim() };
+}
+function firstLine(output: string): string | undefined {
+  return output.trim().split("\n").find(Boolean)?.slice(0, 200);
+}
 export function createSafeChildEnvironment(
   source: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {

@@ -72,6 +72,8 @@ export type BuildWithAIOptions = {
     provider: CliAgentProvider;
     command?: string;
     model?: string;
+    /** Uses this API key instead of the CLI's own login. */
+    apiKey?: string;
     agentTimeoutMs?: number;
     diagnosticsTimeoutMs?: number;
   } | false;
@@ -337,6 +339,7 @@ export default function buildWithAI(
               ...(options.skills === undefined ? {} : { skills: options.skills }),
               ...('command' in cli && cli.command !== undefined ? { command: cli.command } : {}),
               ...('model' in cli && cli.model !== undefined ? { model: cli.model } : {}),
+              ...('apiKey' in cli && cli.apiKey !== undefined ? { apiKey: cli.apiKey } : {}),
               ...('agentTimeoutMs' in cli && cli.agentTimeoutMs !== undefined ? { agentTimeoutMs: cli.agentTimeoutMs } : {}),
               ...('diagnosticsTimeoutMs' in cli && cli.diagnosticsTimeoutMs !== undefined ? { diagnosticsTimeoutMs: cli.diagnosticsTimeoutMs } : {}),
             });

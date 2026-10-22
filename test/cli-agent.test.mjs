@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  apiKeyEnvironment,
   CliAgentFallback,
   buildPrompt,
   extractAgentResponse,
@@ -400,4 +401,29 @@ test('terminates a provider process that exceeds its configured deadline', async
     /timed out after 30 ms/i,
   );
   await fallback.dispose();
+});
+
+test('passes a configured API key only to the agent CLI', async () => {
+  assert.deepEqual(apiKeyEnvironment('codex', ' sk-test '), { CODEX_API_KEY: 'sk-test' });
+  assert.deepEqual(apiKeyEnvironment('claude', 'sk-ant-test'), { ANTHROPIC_API_KEY: 'sk-ant-test' });
+  assert.deepEqual(apiKeyEnvironment('codex', undefined), {});
+  assert.throws(() => apiKeyEnvironment('codex', '  '), /non-empty string/);
+
+  const fallback = new CliAgentFallback({
+    provider: 'codex',
+    projectRoot: process.cwd(),
+    command: fileURLToPath(new URL('./fixtures/fake-codex-api-key.mjs', import.meta.url)),
+    apiKey: 'sk-test',
+  });
+  assert.deepEqual(await fallback.status(), {
+    provider: 'codex',
+    available: true,
+    authenticated: true,
+    message: 'Codex CLI is installed and will use the configured API key.',
+  });
+  const result = await fallback.execute(
+    { instruction: 'Which key do you see?', reason: 'Informational request.', mode: 'answer' },
+    { commitBatch() { throw new Error('No transaction should be created.'); } },
+  );
+  assert.equal(result.response, 'CODEX_API_KEY=sk-test');
 });
